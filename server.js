@@ -1094,6 +1094,11 @@ app.delete(
    IMPORTAÇÃO DE COLABORADORES
 ========================================================= */
 
+/* =========================================================
+   IMPORTAÇÃO DE COLABORADORES
+   Compatível com planilha OPERA IA e modelo GPS
+   ========================================================= */
+
 app.post(
   "/api/import/employees",
   auth,
@@ -1101,211 +1106,468 @@ app.post(
   async (req, res) => {
     if (!req.file) {
       return res.status(400).json({
-        error:
-          "Selecione uma planilha."
+        error: "Selecione uma planilha."
       });
     }
 
     try {
-      const workbook =
-        XLSX.read(req.file.buffer, {
-          type: "buffer"
-        });
+      const workbook = XLSX.read(req.file.buffer, {
+        type: "buffer"
+      });
 
       const sheet =
-        workbook.Sheets[
-          workbook.SheetNames[0]
-        ];
+        workbook.Sheets[workbook.SheetNames[0]];
 
-      const rows =
-        XLSX.utils.sheet_to_json(
-          sheet,
-          { defval: "" }
-        );
+      const rows = XLSX.utils.sheet_to_json(sheet, {
+        defval: "",
+        raw: false
+      });
+
+      if (!rows.length) {
+        return res.status(400).json({
+          error: "A planilha está vazia."
+        });
+      }
 
       let imported = 0;
+      let updated = 0;
       let skipped = 0;
-      const unknownContracts = [];
 
-      for (const row of rows) {
-        const registration =
-          firstValue(row, [
-            "Matrícula",
-            "Matricula",
-            "MATRICULA",
-            "registration"
-          ]);
+      const errors = [];
+      const createdContracts = [];
 
-        const name =
-          firstValue(row, [
-            "Nome",
-            "NOME",
-            "Colaborador",
-            "name"
-          ]);
+      /* -----------------------------------------
+         FUNÇÕES AUXILIARES
+         ----------------------------------------- */
 
-        const cr =
-          firstValue(row, [
-            "CR",
-            "Contrato",
-            "CONTRATO"
-          ]);
+      const getValue = (row, names) => {
+        for (const name of names) {
+          const key = Object.keys(row).find(
+            k =>
+              String(k)
+                .trim()
+                .toUpperCase() ===
+              String(name)
+                .trim()
+                .toUpperCase()
+          );
 
-        if (!registration || !name) {
-          skipped++;
-          continue;
-        }
-
-        let contractId = null;
-
-        if (cr) {
-          const contract =
-            await pool.query(
-              `
-              SELECT id
-              FROM contracts
-              WHERE
-                cr=$1
-                OR
-                LOWER(name)=LOWER($1)
-              LIMIT 1
-              `,
-              [String(cr).trim()]
-            );
-
-          if (contract.rows[0]) {
-            contractId =
-              contract.rows[0].id;
-          } else {
-            const value =
-              String(cr).trim();
-
-            if (
-              !unknownContracts.includes(
-                value
-              )
-            ) {
-              unknownContracts.push(
-                value
-              );
-            }
+          if (
+            key !== undefined &&
+            row[key] !== undefined &&
+            row[key] !== null &&
+            String(row[key]).trim() !== ""
+          ) {
+            return String(row[key]).trim();
           }
         }
 
-        const postName =
-          firstValue(row, [
-            "Posto",
-            "POSTO",
-            "Local"
+        return "";
+      };
+
+      const splitCodeAndName = value => {
+        const text = String(value || "").trim();
+
+        if (!text) {
+          return {
+            code: "",
+            name: ""
+          };
+        }
+
+        /*
+         * Exemplos:
+         *
+         * 011881 - ALMIR RAFAEL GOMES DA SILVA
+         * 87664 - GO - SEG - BURITI SHOPPING
+         */
+
+        const match = text.match(
+          /^([A-Za-z0-9._/]+)\s*-\s*(.+)$/
+        );
+
+        if (match) {
+          return {
+            code: match[1].trim(),
+            name: match[2].trim()
+          };
+        }
+
+        return {
+          code: "",
+          name: text
+        };
+      };
+
+      /* -----------------------------------------
+         PROCESSAMENTO
+         ----------------------------------------- */
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+
+        try {
+          /* =====================================
+             COLABORADOR
+             ===================================== */
+
+          const collaboratorRaw = getValue(row, [
+            "COLABORADOR",
+            "Colaborador",
+            "FUNCIONARIO",
+            "FUNCIONÁRIO",
+            "EMPLOYEE"
           ]);
 
-        let postId = null;
+          let registration = getValue(row, [
+            "MATRICULA",
+            "MATRÍCULA",
+            "REGISTRATION"
+          ]);
 
-        if (postName && contractId) {
-          const post =
+          let employeeName = getValue(row, [
+            "NOME",
+            "Nome",
+            "NAME"
+          ]);
+
+          if (collaboratorRaw) {
+            const collaborator =
+              splitCodeAndName(collaboratorRaw);
+
+            if (!registration) {
+              registration =
+                collaborator.code;
+            }
+
+            if (!employeeName) {
+              employeeName =
+                collaborator.name;
+            }
+          }
+
+          registration =
+            String(registration || "")
+              .trim();
+
+          employeeName =
+            String(employeeName || "")
+              .trim();
+
+          /*
+           * Preserva matrículas como:
+           * 000818
+           * 011881
+           */
+
+          if (!registration || !employeeName) {
+            skipped++;
+
+            errors.push({
+              row: i + 2,
+              error:
+                "Matrícula ou nome do colaborador não identificado."
+            });
+
+            continue;
+          }
+
+          /* =====================================
+             CONTRATO / CR
+             ===================================== */
+
+          const crRaw = getValue(row, [
+            "CR",
+            "CONTRATO",
+            "Contrato"
+          ]);
+
+          let contractCode = "";
+          let contractName = "";
+
+          if (crRaw) {
+            const contract =
+              splitCodeAndName(crRaw);
+
+            contractCode =
+              contract.code ||
+              String(crRaw).trim();
+
+            contractName =
+              contract.name ||
+              String(crRaw).trim();
+          }
+
+          let contractId = null;
+
+          if (contractCode) {
+            let contractResult =
+              await pool.query(
+                `
+                SELECT id, name
+                FROM contracts
+                WHERE cr = $1
+                LIMIT 1
+                `,
+                [contractCode]
+              );
+
+            if (!contractResult.rows[0]) {
+              contractResult =
+                await pool.query(
+                  `
+                  INSERT INTO contracts
+                    (cr, name, active)
+                  VALUES
+                    ($1, $2, TRUE)
+                  RETURNING id, name
+                  `,
+                  [
+                    contractCode,
+                    contractName ||
+                      `CR ${contractCode}`
+                  ]
+                );
+
+              createdContracts.push({
+                cr: contractCode,
+                name:
+                  contractName ||
+                  `CR ${contractCode}`
+              });
+            } else if (
+              contractName &&
+              contractResult.rows[0].name !==
+                contractName
+            ) {
+              /*
+               * Atualiza o nome do contrato
+               * caso o CR já exista.
+               */
+
+              await pool.query(
+                `
+                UPDATE contracts
+                SET
+                  name = $1,
+                  active = TRUE
+                WHERE id = $2
+                `,
+                [
+                  contractName,
+                  contractResult.rows[0].id
+                ]
+              );
+            }
+
+            contractId =
+              contractResult.rows[0].id;
+          }
+
+          /* =====================================
+             HORÁRIO
+             ===================================== */
+
+          const schedule = getValue(row, [
+            "HORARIO CONTRATO",
+            "HORÁRIO CONTRATO",
+            "HORARIO",
+            "HORÁRIO",
+            "ESCALA",
+            "JORNADA",
+            "SCHEDULE"
+          ]);
+
+          /*
+           * Exemplos aceitos:
+           *
+           * 10:00#15:00#16:00#22:00
+           * 07:00#12:00#13:00#19:00
+           * FOLGA
+           */
+
+          /* =====================================
+             OUTROS CAMPOS OPCIONAIS
+             ===================================== */
+
+          const phoneRaw = getValue(row, [
+            "TELEFONE",
+            "WHATSAPP",
+            "CELULAR",
+            "PHONE"
+          ]);
+
+          const phone = phoneRaw
+            ? normalizePhone(phoneRaw)
+            : null;
+
+          const role = getValue(row, [
+            "POSTO",
+            "FUNCAO",
+            "FUNÇÃO",
+            "CARGO",
+            "ROLE"
+          ]) || null;
+
+          const shiftRaw = getValue(row, [
+            "TURNO",
+            "PAR/IMPAR",
+            "PAR/ÍMPAR",
+            "ESCALA PAR IMPAR",
+            "SHIFT"
+          ]);
+
+          const shift = shiftRaw
+            ? normalizeShift(shiftRaw)
+            : null;
+
+          /* =====================================
+             VERIFICA MATRÍCULA
+             ===================================== */
+
+          const existing =
             await pool.query(
               `
-              SELECT id
-              FROM posts
-              WHERE contract_id=$1
-                AND LOWER(name)=LOWER($2)
+              SELECT
+                id,
+                contract_id
+              FROM employees
+              WHERE registration = $1
               LIMIT 1
               `,
+              [registration]
+            );
+
+          if (existing.rows[0]) {
+            /*
+             * MATRÍCULA JÁ EXISTE:
+             * atualiza o cadastro.
+             *
+             * Isso também permite identificar
+             * transferência entre CRs.
+             */
+
+            await pool.query(
+              `
+              UPDATE employees
+              SET
+                name = $1,
+                phone =
+                  COALESCE($2, phone),
+                contract_id =
+                  COALESCE($3, contract_id),
+                role =
+                  COALESCE($4, role),
+                shift =
+                  COALESCE($5, shift),
+                schedule =
+                  COALESCE($6, schedule),
+                active = TRUE,
+                updated_at = NOW()
+              WHERE registration = $7
+              `,
               [
+                employeeName,
+                phone,
                 contractId,
-                String(postName).trim()
+                role,
+                shift,
+                schedule || null,
+                registration
               ]
             );
 
-          if (post.rows[0]) {
-            postId = post.rows[0].id;
+            updated++;
+          } else {
+            /*
+             * NOVO COLABORADOR
+             */
+
+            await pool.query(
+              `
+              INSERT INTO employees
+              (
+                registration,
+                name,
+                phone,
+                contract_id,
+                role,
+                shift,
+                schedule,
+                active
+              )
+              VALUES
+              (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                $6,
+                $7,
+                TRUE
+              )
+              `,
+              [
+                registration,
+                employeeName,
+                phone,
+                contractId,
+                role,
+                shift,
+                schedule || null
+              ]
+            );
+
+            imported++;
           }
+        } catch (rowError) {
+          console.error(
+            `Erro na linha ${i + 2}:`,
+            rowError
+          );
+
+          skipped++;
+
+          errors.push({
+            row: i + 2,
+            error:
+              rowError.message ||
+              "Erro ao processar colaborador."
+          });
         }
-
-        await pool.query(
-          `
-          INSERT INTO employees
-            (
-              registration,
-              name,
-              phone,
-              contract_id,
-              post_id,
-              role,
-              shift,
-              schedule,
-              active
-            )
-          VALUES
-            (
-              $1,$2,$3,$4,$5,
-              $6,$7,$8,TRUE
-            )
-          ON CONFLICT (registration)
-          DO UPDATE SET
-            name=EXCLUDED.name,
-            phone=EXCLUDED.phone,
-            contract_id=
-              EXCLUDED.contract_id,
-            post_id=EXCLUDED.post_id,
-            role=EXCLUDED.role,
-            shift=EXCLUDED.shift,
-            schedule=
-              EXCLUDED.schedule,
-            active=TRUE,
-            updated_at=NOW()
-          `,
-          [
-            String(registration).trim(),
-            String(name).trim(),
-            normalizePhone(
-              firstValue(row, [
-                "Telefone",
-                "WhatsApp",
-                "Celular",
-                "TELEFONE"
-              ])
-            ),
-            contractId,
-            postId,
-            firstValue(row, [
-              "Função",
-              "Funcao",
-              "FUNCAO",
-              "Cargo"
-            ]) || null,
-            normalizeShift(
-              firstValue(row, [
-                "Escala",
-                "ESCALA",
-                "Par/Impar",
-                "Par/Ímpar"
-              ])
-            ),
-            firstValue(row, [
-              "Horário",
-              "Horario",
-              "HORARIO"
-            ]) || null
-          ]
-        );
-
-        imported++;
       }
+
+      /* -----------------------------------------
+         RESULTADO DA IMPORTAÇÃO
+         ----------------------------------------- */
 
       res.json({
         ok: true,
-        imported,
-        skipped,
+
+        message:
+          "Planilha processada com sucesso.",
+
         total: rows.length,
-        unknownContracts
+
+        imported,
+        updated,
+        skipped,
+
+        createdContracts,
+
+        errors: errors.slice(0, 50)
       });
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Erro na importação de colaboradores:",
+        error
+      );
 
       res.status(500).json({
         error:
-          "Não foi possível importar a planilha."
+          "Não foi possível importar a planilha.",
+        details: error.message
       });
     }
   }
