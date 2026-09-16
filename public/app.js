@@ -4,6 +4,14 @@ let token = localStorage.getItem("opera_token") || "";
 let currentUser = JSON.parse(localStorage.getItem("opera_user") || "null");
 let currentPage = "dashboard";
 
+let cache = {
+  contracts: [],
+  posts: [],
+  employees: [],
+  requests: [],
+  coverages: []
+};
+
 const menu = [
   ["dashboard", "📊", "Dashboard"],
   ["contratos", "🏢", "Contratos / CR"],
@@ -19,11 +27,18 @@ const menu = [
   ["administracao", "⚙️", "Administração"]
 ];
 
+/* =========================
+   API
+========================= */
+
 async function api(url, options = {}) {
   const headers = {
-    "Content-Type": "application/json",
     ...(options.headers || {})
   };
+
+  if (!(options.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
 
   if (token) {
     headers.Authorization = `Bearer ${token}`;
@@ -34,7 +49,9 @@ async function api(url, options = {}) {
     headers
   });
 
-  const data = await response.json().catch(() => ({}));
+  const data = await response
+    .json()
+    .catch(() => ({}));
 
   if (response.status === 401 && token) {
     logout();
@@ -42,13 +59,16 @@ async function api(url, options = {}) {
   }
 
   if (!response.ok) {
-    throw new Error(data.error || "Erro ao processar solicitação.");
+    throw new Error(
+      data.error ||
+      "Não foi possível concluir a operação."
+    );
   }
 
   return data;
 }
 
-function escapeHtml(value = "") {
+function esc(value = "") {
   return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -56,6 +76,40 @@ function escapeHtml(value = "") {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+
+function moneyHours(value) {
+  return Number(value || 0)
+    .toLocaleString("pt-BR", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 2
+    });
+}
+
+function dateBR(value) {
+  if (!value) return "-";
+
+  const text = String(value).slice(0, 10);
+  const [y, m, d] = text.split("-");
+
+  return `${d}/${m}/${y}`;
+}
+
+function notify(message, type = "success") {
+  const old = document.querySelector(".toast");
+  if (old) old.remove();
+
+  const div = document.createElement("div");
+  div.className = `toast ${type}`;
+  div.textContent = message;
+
+  document.body.appendChild(div);
+
+  setTimeout(() => div.remove(), 3500);
+}
+
+/* =========================
+   AUTENTICAÇÃO
+========================= */
 
 function authScreen(title, subtitle, fields, button, action) {
   app.innerHTML = `
@@ -79,7 +133,6 @@ function authScreen(title, subtitle, fields, button, action) {
         </p>
 
         <form id="authForm">
-
           ${fields}
 
           <div
@@ -92,7 +145,6 @@ function authScreen(title, subtitle, fields, button, action) {
             class="primary auth-button">
             ${button}
           </button>
-
         </form>
 
       </div>
@@ -107,24 +159,16 @@ function authScreen(title, subtitle, fields, button, action) {
 function setupScreen() {
   authScreen(
     "Primeiro acesso",
-    "Crie a conta do administrador principal do sistema.",
+    "Crie o administrador principal.",
     `
       <label>
         Nome
-        <input
-          id="name"
-          type="text"
-          placeholder="Nome do administrador"
-          required>
+        <input id="name" required>
       </label>
 
       <label>
         E-mail
-        <input
-          id="email"
-          type="email"
-          placeholder="seu@email.com"
-          required>
+        <input id="email" type="email" required>
       </label>
 
       <label>
@@ -132,7 +176,6 @@ function setupScreen() {
         <input
           id="password"
           type="password"
-          placeholder="Mínimo de 8 caracteres"
           minlength="8"
           required>
       </label>
@@ -142,7 +185,6 @@ function setupScreen() {
         <input
           id="confirmPassword"
           type="password"
-          placeholder="Digite novamente"
           minlength="8"
           required>
       </label>
@@ -158,19 +200,13 @@ async function createAdmin(event) {
   const message =
     document.getElementById("authMessage");
 
-  const name =
-    document.getElementById("name").value.trim();
-
-  const email =
-    document.getElementById("email").value.trim();
-
   const password =
     document.getElementById("password").value;
 
-  const confirmPassword =
-    document.getElementById("confirmPassword").value;
-
-  if (password !== confirmPassword) {
+  if (
+    password !==
+    document.getElementById("confirmPassword").value
+  ) {
     message.textContent =
       "As senhas não coincidem.";
 
@@ -181,25 +217,20 @@ async function createAdmin(event) {
   }
 
   try {
-    message.textContent =
-      "Criando administrador...";
-
-    message.className =
-      "auth-message";
-
     await api("/api/setup", {
       method: "POST",
       body: JSON.stringify({
-        name,
-        email,
+        name:
+          document.getElementById("name").value,
+        email:
+          document.getElementById("email").value,
         password
       })
     });
 
     loginScreen(
-      "Administrador criado com sucesso. Faça seu login."
+      "Administrador criado. Faça seu login."
     );
-
   } catch (error) {
     message.textContent = error.message;
     message.className =
@@ -207,14 +238,14 @@ async function createAdmin(event) {
   }
 }
 
-function loginScreen(successMessage = "") {
+function loginScreen(success = "") {
   authScreen(
     "Acessar sistema",
-    "Entre com suas credenciais para continuar.",
+    "Entre com suas credenciais.",
     `
       ${
-        successMessage
-          ? `<div class="success-box">${escapeHtml(successMessage)}</div>`
+        success
+          ? `<div class="success-box">${esc(success)}</div>`
           : ""
       }
 
@@ -223,7 +254,6 @@ function loginScreen(successMessage = "") {
         <input
           id="email"
           type="email"
-          placeholder="seu@email.com"
           required>
       </label>
 
@@ -232,7 +262,6 @@ function loginScreen(successMessage = "") {
         <input
           id="password"
           type="password"
-          placeholder="Sua senha"
           required>
       </label>
     `,
@@ -249,7 +278,6 @@ async function login(event) {
 
   try {
     message.textContent = "Entrando...";
-    message.className = "auth-message";
 
     const data = await api("/api/login", {
       method: "POST",
@@ -275,7 +303,6 @@ async function login(event) {
     );
 
     render("dashboard");
-
   } catch (error) {
     message.textContent = error.message;
     message.className =
@@ -293,589 +320,65 @@ function logout() {
   loginScreen();
 }
 
-async function dashboard() {
-  try {
-    const data =
-      await api("/api/dashboard");
-
-    return `
-      <div class="page-header">
-
-        <div>
-          <h1>Dashboard</h1>
-          <p>
-            Visão geral das operações
-          </p>
-        </div>
-
-        <button
-          class="primary"
-          onclick="render('coberturas')">
-          + Nova Cobertura
-        </button>
-
-      </div>
-
-      <div class="cards">
-
-        <div class="card">
-          <span>Contratos ativos</span>
-          <strong>${data.contracts || 0}</strong>
-          <small>
-            Contratos cadastrados
-          </small>
-        </div>
-
-        <div class="card">
-          <span>Colaboradores</span>
-          <strong>${data.employees || 0}</strong>
-          <small>
-            Colaboradores ativos
-          </small>
-        </div>
-
-        <div class="card">
-          <span>Horas extras</span>
-          <strong>${data.overtime || 0}</strong>
-          <small>
-            No mês atual
-          </small>
-        </div>
-
-        <div class="card">
-          <span>Pendências</span>
-          <strong>${data.pending || 0}</strong>
-          <small>
-            Aguardando ação
-          </small>
-        </div>
-
-      </div>
-
-      <div class="dashboard-grid">
-
-        <div class="panel">
-
-          <div class="panel-title">
-            <h3>Coberturas recentes</h3>
-
-            <button
-              onclick="render('coberturas')">
-              Ver todas
-            </button>
-          </div>
-
-          <div class="empty">
-            <div class="empty-icon">🤖</div>
-
-            <h3>
-              Nenhuma cobertura registrada
-            </h3>
-
-            <p>
-              As coberturas realizadas aparecerão aqui.
-            </p>
-          </div>
-
-        </div>
-
-        <div class="panel">
-
-          <div class="panel-title">
-            <h3>
-              Central de Pendências
-            </h3>
-          </div>
-
-          <div class="pending-item">
-            <span>
-              📄 Folhas de ponto
-            </span>
-            <strong>0</strong>
-          </div>
-
-          <div class="pending-item">
-            <span>
-              🎓 Treinamentos
-            </span>
-            <strong>0</strong>
-          </div>
-
-          <div class="pending-item">
-            <span>
-              ⚠️ Outras solicitações
-            </span>
-            <strong>${data.pending || 0}</strong>
-          </div>
-
-        </div>
-
-      </div>
-    `;
-
-  } catch (error) {
-    return errorPage(error.message);
-  }
-}
-
-async function contractsPage() {
-  try {
-    const contracts =
-      await api("/api/contracts");
-
-    return `
-      <div class="page-header">
-
-        <div>
-          <h1>Contratos / CR</h1>
-          <p>
-            Gerencie os contratos da operação
-          </p>
-        </div>
-
-        <button
-          class="primary"
-          onclick="showContractForm()">
-          + Novo Contrato
-        </button>
-
-      </div>
-
-      <div
-        id="contractFormArea">
-      </div>
-
-      <div class="panel">
-
-        <div class="panel-title">
-          <h3>
-            Contratos cadastrados
-          </h3>
-
-          <span>
-            ${contracts.length}
-          </span>
-        </div>
-
-        ${
-          contracts.length
-            ? `
-              <div class="table-wrap">
-
-                <table class="data-table">
-
-                  <thead>
-                    <tr>
-                      <th>CR</th>
-                      <th>Contrato</th>
-                      <th>Status</th>
-                      <th>Ação</th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-
-                    ${contracts
-                      .map(
-                        contract => `
-                          <tr>
-
-                            <td>
-                              <strong>
-                                ${escapeHtml(contract.cr)}
-                              </strong>
-                            </td>
-
-                            <td>
-                              ${escapeHtml(contract.name)}
-                            </td>
-
-                            <td>
-                              <span class="badge ${
-                                contract.active
-                                  ? "active-badge"
-                                  : "inactive-badge"
-                              }">
-                                ${
-                                  contract.active
-                                    ? "Ativo"
-                                    : "Inativo"
-                                }
-                              </span>
-                            </td>
-
-                            <td>
-
-                              ${
-                                contract.active
-                                  ? `
-                                    <button
-                                      class="small-button"
-                                      onclick="deactivateContract(${contract.id})">
-                                      Desativar
-                                    </button>
-                                  `
-                                  : `
-                                    <button
-                                      class="small-button"
-                                      onclick="reactivateContract(
-                                        ${contract.id},
-                                        '${escapeHtml(contract.cr)}',
-                                        '${escapeHtml(contract.name)}'
-                                      )">
-                                      Reativar
-                                    </button>
-                                  `
-                              }
-
-                            </td>
-
-                          </tr>
-                        `
-                      )
-                      .join("")}
-
-                  </tbody>
-
-                </table>
-
-              </div>
-            `
-            : `
-              <div class="empty">
-
-                <div class="empty-icon">
-                  🏢
-                </div>
-
-                <h3>
-                  Nenhum contrato cadastrado
-                </h3>
-
-                <p>
-                  Clique em Novo Contrato para começar.
-                </p>
-
-              </div>
-            `
-        }
-
-      </div>
-    `;
-
-  } catch (error) {
-    return errorPage(error.message);
-  }
-}
-
-function showContractForm() {
-  const area =
-    document.getElementById(
-      "contractFormArea"
-    );
-
-  area.innerHTML = `
-    <div class="panel form-panel">
-
-      <div class="panel-title">
-        <h3>Novo Contrato</h3>
-
-        <button
-          onclick="closeContractForm()">
-          ✕
-        </button>
-      </div>
-
-      <form
-        id="contractForm"
-        class="contract-form">
-
-        <label>
-          CR
-          <input
-            id="contractCR"
-            type="text"
-            placeholder="Ex.: 12345"
-            required>
-        </label>
-
-        <label>
-          Nome do contrato
-          <input
-            id="contractName"
-            type="text"
-            placeholder="Ex.: Buriti Shopping"
-            required>
-        </label>
-
-        <div
-          id="contractMessage"
-          class="auth-message">
-        </div>
-
-        <button
-          type="submit"
-          class="primary">
-          Salvar Contrato
-        </button>
-
-      </form>
-
-    </div>
-  `;
-
-  document
-    .getElementById("contractForm")
-    .addEventListener(
-      "submit",
-      saveContract
-    );
-}
-
-function closeContractForm() {
-  document.getElementById(
-    "contractFormArea"
-  ).innerHTML = "";
-}
-
-async function saveContract(event) {
-  event.preventDefault();
-
-  const message =
-    document.getElementById(
-      "contractMessage"
-    );
-
-  try {
-    message.textContent =
-      "Salvando...";
-
-    await api("/api/contracts", {
-      method: "POST",
-      body: JSON.stringify({
-        cr:
-          document.getElementById(
-            "contractCR"
-          ).value,
-
-        name:
-          document.getElementById(
-            "contractName"
-          ).value
-      })
-    });
-
-    await render("contratos");
-
-  } catch (error) {
-    message.textContent =
-      error.message;
-
-    message.className =
-      "auth-message error";
-  }
-}
-
-async function deactivateContract(id) {
-  if (
-    !confirm(
-      "Deseja desativar este contrato?"
-    )
-  ) {
-    return;
-  }
-
-  try {
-    const contracts =
-      await api("/api/contracts");
-
-    const contract =
-      contracts.find(
-        item => item.id === id
-      );
-
-    if (!contract) return;
-
-    await api(
-      `/api/contracts/${id}`,
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          cr: contract.cr,
-          name: contract.name,
-          active: false
-        })
-      }
-    );
-
-    await render("contratos");
-
-  } catch (error) {
-    alert(error.message);
-  }
-}
-
-async function reactivateContract(
-  id,
-  cr,
-  name
-) {
-  try {
-    await api(
-      `/api/contracts/${id}`,
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          cr,
-          name,
-          active: true
-        })
-      }
-    );
-
-    await render("contratos");
-
-  } catch (error) {
-    alert(error.message);
-  }
-}
-
-function genericPage(title) {
-  return `
-    <div class="page-header">
-
-      <div>
-        <h1>${title}</h1>
-        <p>Módulo OPERA IA</p>
-      </div>
-
-    </div>
-
-    <div class="panel">
-
-      <div class="empty">
-
-        <div class="empty-icon">
-          🚧
-        </div>
-
-        <h3>${title}</h3>
-
-        <p>
-          Este módulo será liberado
-          nas próximas etapas.
-        </p>
-
-      </div>
-
-    </div>
-  `;
-}
-
-function errorPage(message) {
-  return `
-    <div class="panel">
-
-      <div class="empty">
-
-        <div class="empty-icon">
-          ⚠️
-        </div>
-
-        <h3>
-          Não foi possível carregar
-        </h3>
-
-        <p>
-          ${escapeHtml(message)}
-        </p>
-
-      </div>
-
-    </div>
-  `;
-}
+/* =========================
+   LAYOUT
+========================= */
 
 async function render(page = "dashboard") {
   currentPage = page;
 
-  const current =
-    menu.find(
-      item => item[0] === page
-    );
+  const item =
+    menu.find(x => x[0] === page);
 
   const title =
-    current
-      ? current[2]
-      : "Dashboard";
+    item ? item[2] : "Dashboard";
 
   app.innerHTML = `
     <aside class="sidebar">
 
       <div class="brand">
-
-        <div class="brand-icon">
-          O
-        </div>
+        <div class="brand-icon">O</div>
 
         <div>
           <strong>OPERA IA</strong>
-          <small>
-            Gestão Inteligente
-          </small>
+          <small>Gestão Inteligente</small>
         </div>
-
       </div>
 
       <nav>
+        ${menu.map(item => `
+          <button
+            class="nav-item ${
+              page === item[0]
+                ? "active"
+                : ""
+            }"
+            onclick="render('${item[0]}')">
 
-        ${menu
-          .map(
-            item => `
-              <button
-                class="nav-item ${
-                  page === item[0]
-                    ? "active"
-                    : ""
-                }"
-                onclick="render('${item[0]}')">
+            <span>${item[1]}</span>
+            ${item[2]}
 
-                <span>${item[1]}</span>
-
-                ${item[2]}
-
-              </button>
-            `
-          )
-          .join("")}
-
+          </button>
+        `).join("")}
       </nav>
 
       <div class="sidebar-footer">
 
         <div class="user-avatar">
-          ${
+          ${esc(
             currentUser?.name
-              ? currentUser.name
-                  .substring(0, 2)
-                  .toUpperCase()
-              : "AD"
-          }
+              ?.substring(0, 2)
+              .toUpperCase() || "AD"
+          )}
         </div>
 
         <div>
           <strong>
-            ${escapeHtml(
-              currentUser?.name ||
-              "Administrador"
-            )}
+            ${esc(currentUser?.name || "")}
           </strong>
 
           <small>
-            ${escapeHtml(
-              currentUser?.role ||
-              "ADM"
-            )}
+            ${esc(currentUser?.role || "")}
           </small>
         </div>
 
@@ -891,8 +394,7 @@ async function render(page = "dashboard") {
           <strong>OPERA IA</strong>
 
           <span>
-            A inteligência que conecta
-            pessoas às operações.
+            A inteligência que conecta pessoas às operações.
           </span>
         </div>
 
@@ -914,11 +416,11 @@ async function render(page = "dashboard") {
       </header>
 
       <section
-        class="content"
-        id="pageContent">
+        id="pageContent"
+        class="content">
 
         <div class="empty">
-          <p>Carregando...</p>
+          Carregando...
         </div>
 
       </section>
@@ -926,32 +428,3355 @@ async function render(page = "dashboard") {
     </main>
   `;
 
-  let content;
+  try {
+    let html = "";
 
-  if (page === "dashboard") {
-    content = await dashboard();
+    switch (page) {
+      case "dashboard":
+        html = await dashboardPage();
+        break;
 
-  } else if (page === "contratos") {
-    content = await contractsPage();
+      case "contratos":
+        html = await contractsPage();
+        break;
 
-  } else {
-    content = genericPage(title);
-  }
+      case "postos":
+        html = await postsPage();
+        break;
 
-  const pageContent =
+      case "colaboradores":
+        html = await employeesPage();
+        break;
+
+      case "importar":
+        html = importPage();
+        break;
+
+      case "coberturas":
+        html = await coveragesPage();
+        break;
+
+      case "extras":
+        html = await overtimePage();
+        break;
+
+      case "ponto":
+        html = await requestPage("FOLHA_PONTO");
+        break;
+
+      case "treinamentos":
+        html = await requestPage("TREINAMENTO");
+        break;
+
+      case "pendencias":
+        html = await pendingPage();
+        break;
+
+      case "relatorios":
+        html = await reportsPage();
+        break;
+
+      case "administracao":
+        html = await adminPage();
+        break;
+
+      default:
+        html = `<h1>${esc(title)}</h1>`;
+    }
+
     document.getElementById(
       "pageContent"
-    );
+    ).innerHTML = html;
 
-  if (pageContent) {
-    pageContent.innerHTML = content;
+  } catch (error) {
+    document.getElementById(
+      "pageContent"
+    ).innerHTML = `
+      <div class="panel">
+        <div class="empty">
+          <div class="empty-icon">⚠️</div>
+          <h3>Não foi possível carregar</h3>
+          <p>${esc(error.message)}</p>
+        </div>
+      </div>
+    `;
   }
 }
+
+/* =========================
+   DASHBOARD
+========================= */
+
+async function dashboardPage() {
+  const data =
+    await api("/api/dashboard");
+
+  return `
+    <div class="page-header">
+      <div>
+        <h1>Dashboard</h1>
+        <p>
+          Visão geral das operações
+        </p>
+      </div>
+
+      <button
+        class="primary"
+        onclick="render('coberturas')">
+        + Nova Cobertura
+      </button>
+    </div>
+
+    <div class="cards">
+
+      ${card(
+        "Contratos ativos",
+        data.contracts,
+        "Contratos cadastrados"
+      )}
+
+      ${card(
+        "Postos",
+        data.posts,
+        "Postos operacionais"
+      )}
+
+      ${card(
+        "Colaboradores",
+        data.employees,
+        "Colaboradores ativos"
+      )}
+
+      ${card(
+        "Horas extras",
+        `${moneyHours(data.overtime)}h`,
+        "Mês atual"
+      )}
+
+    </div>
+
+    <div class="dashboard-grid">
+
+      <div class="panel">
+
+        <div class="panel-title">
+          <h3>Coberturas</h3>
+        </div>
+
+        <div class="metric-big">
+          ${data.coverages_today || 0}
+        </div>
+
+        <p class="muted">
+          Coberturas registradas hoje
+        </p>
+
+        <button
+          class="primary"
+          onclick="render('coberturas')">
+          Abrir Coberturas IA
+        </button>
+
+      </div>
+
+      <div class="panel">
+
+        <div class="panel-title">
+          <h3>Central de Pendências</h3>
+        </div>
+
+        <div class="metric-big">
+          ${data.pending || 0}
+        </div>
+
+        <p class="muted">
+          Solicitações aguardando ação
+        </p>
+
+        <button
+          class="secondary"
+          onclick="render('pendencias')">
+          Ver pendências
+        </button>
+
+      </div>
+
+    </div>
+  `;
+}
+
+function card(title, value, subtitle) {
+  return `
+    <div class="card">
+      <span>${title}</span>
+      <strong>${value || 0}</strong>
+      <small>${subtitle}</small>
+    </div>
+  `;
+}
+
+/* =========================
+   CONTRATOS
+========================= */
+
+async function contractsPage() {
+  cache.contracts =
+    await api("/api/contracts");
+
+  return `
+    <div class="page-header">
+      <div>
+        <h1>Contratos / CR</h1>
+        <p>
+          Cadastro e gestão dos contratos
+        </p>
+      </div>
+
+      <button
+        class="primary"
+        onclick="showContractForm()">
+        + Novo Contrato
+      </button>
+    </div>
+
+    <div id="formArea"></div>
+
+    <div class="panel">
+      <div class="panel-title">
+        <h3>
+          Contratos cadastrados
+        </h3>
+
+        <span>
+          ${cache.contracts.length}
+        </span>
+      </div>
+
+      ${
+        cache.contracts.length
+          ? `
+          <div class="table-wrap">
+            <table class="data-table">
+
+              <thead>
+                <tr>
+                  <th>CR</th>
+                  <th>Contrato</th>
+                  <th>Postos</th>
+                  <th>Colaboradores</th>
+                  <th>Status</th>
+                  <th>Ação</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                ${cache.contracts.map(c => `
+                  <tr>
+                    <td>
+                      <strong>
+                        ${esc(c.cr)}
+                      </strong>
+                    </td>
+
+                    <td>${esc(c.name)}</td>
+
+                    <td>${c.posts || 0}</td>
+
+                    <td>
+                      ${c.employees || 0}
+                    </td>
+
+                    <td>
+                      ${statusBadge(
+                        c.active
+                          ? "ATIVO"
+                          : "INATIVO"
+                      )}
+                    </td>
+
+                    <td>
+                      <button
+                        class="small-button"
+                        onclick="toggleContract(
+                          ${c.id},
+                          ${!c.active}
+                        )">
+                        ${
+                          c.active
+                            ? "Desativar"
+                            : "Reativar"
+                        }
+                      </button>
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+
+            </table>
+          </div>
+          `
+          : empty(
+              "🏢",
+              "Nenhum contrato",
+              "Cadastre seu primeiro contrato."
+            )
+      }
+    </div>
+  `;
+}
+
+function showContractForm() {
+  document.getElementById("formArea").innerHTML = `
+    <div class="panel form-panel">
+
+      <div class="panel-title">
+        <h3>Novo Contrato</h3>
+
+        <button
+          onclick="
+            document.getElementById('formArea').innerHTML=''
+          ">
+          ✕
+        </button>
+      </div>
+
+      <form
+        class="form-grid"
+        onsubmit="saveContract(event)">
+
+        <label>
+          CR
+          <input
+            id="contractCR"
+            required
+            placeholder="Código CR">
+        </label>
+
+        <label>
+          Nome do contrato
+          <input
+            id="contractName"
+            required
+            placeholder="Ex.: Buriti Shopping">
+        </label>
+
+        <div class="form-actions">
+          <button class="primary">
+            Salvar Contrato
+          </button>
+        </div>
+
+      </form>
+    </div>
+  `;
+}
+
+async function saveContract(event) {
+  event.preventDefault();
+
+  try {
+    await api("/api/contracts", {
+      method: "POST",
+      body: JSON.stringify({
+        cr:
+          document.getElementById(
+            "contractCR"
+          ).value,
+
+        name:
+          document.getElementById(
+            "contractName"
+          ).value
+      })
+    });
+
+    notify("Contrato salvo.");
+    render("contratos");
+
+  } catch (error) {
+    notify(error.message, "error");
+  }
+}
+
+async function toggleContract(id, active) {
+  const contract =
+    cache.contracts.find(
+      c => c.id === id
+    );
+
+  if (!contract) return;
+
+  await api(`/api/contracts/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      cr: contract.cr,
+      name: contract.name,
+      active
+    })
+  });
+
+  notify(
+    active
+      ? "Contrato reativado."
+      : "Contrato desativado."
+  );
+
+  render("contratos");
+}
+
+/* =========================
+   POSTOS
+========================= */
+
+async function postsPage() {
+  cache.contracts =
+    await api("/api/contracts");
+
+  cache.posts =
+    await api("/api/posts");
+
+  return `
+    <div class="page-header">
+
+      <div>
+        <h1>Postos</h1>
+        <p>
+          Postos vinculados aos contratos
+        </p>
+      </div>
+
+      <button
+        class="primary"
+        onclick="showPostForm()">
+        + Novo Posto
+      </button>
+
+    </div>
+
+    <div id="formArea"></div>
+
+    <div class="panel">
+
+      ${
+        cache.posts.length
+          ? `
+          <div class="table-wrap">
+            <table class="data-table">
+
+              <thead>
+                <tr>
+                  <th>CR</th>
+                  <th>Contrato</th>
+                  <th>Posto</th>
+                  <th>Colaboradores</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                ${cache.posts.map(p => `
+                  <tr>
+                    <td>${esc(p.cr)}</td>
+                    <td>
+                      ${esc(p.contract_name)}
+                    </td>
+                    <td>
+                      <strong>
+                        ${esc(p.name)}
+                      </strong>
+                    </td>
+                    <td>
+                      ${p.employees || 0}
+                    </td>
+                    <td>
+                      ${statusBadge(
+                        p.active
+                          ? "ATIVO"
+                          : "INATIVO"
+                      )}
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+
+            </table>
+          </div>
+          `
+          : empty(
+              "📍",
+              "Nenhum posto",
+              "Cadastre os postos dos seus contratos."
+            )
+      }
+
+    </div>
+  `;
+}
+
+function showPostForm() {
+  document.getElementById("formArea").innerHTML = `
+    <div class="panel form-panel">
+
+      <div class="panel-title">
+        <h3>Novo Posto</h3>
+
+        <button
+          onclick="
+            document.getElementById('formArea').innerHTML=''
+          ">
+          ✕
+        </button>
+      </div>
+
+      <form
+        class="form-grid"
+        onsubmit="savePost(event)">
+
+        <label>
+          Contrato
+          <select
+            id="postContract"
+            required>
+
+            <option value="">
+              Selecione
+            </option>
+
+            ${activeContractsOptions()}
+
+          </select>
+        </label>
+
+        <label>
+          Nome do posto
+          <input
+            id="postName"
+            required
+            placeholder="Ex.: Portaria P2">
+        </label>
+
+        <label class="full">
+          Descrição
+          <input
+            id="postDescription"
+            placeholder="Opcional">
+        </label>
+
+        <div class="form-actions">
+          <button class="primary">
+            Salvar Posto
+          </button>
+        </div>
+
+      </form>
+    </div>
+  `;
+}
+
+async function savePost(event) {
+  event.preventDefault();
+
+  try {
+    await api("/api/posts", {
+      method: "POST",
+      body: JSON.stringify({
+        contract_id:
+          document.getElementById(
+            "postContract"
+          ).value,
+
+        name:
+          document.getElementById(
+            "postName"
+          ).value,
+
+        description:
+          document.getElementById(
+            "postDescription"
+          ).value
+      })
+    });
+
+    notify("Posto cadastrado.");
+    render("postos");
+
+  } catch (error) {
+    notify(error.message, "error");
+  }
+}
+
+/* =========================
+   COLABORADORES
+========================= */
+
+async function employeesPage() {
+  cache.contracts =
+    await api("/api/contracts");
+
+  cache.posts =
+    await api("/api/posts");
+
+  cache.employees =
+    await api("/api/employees");
+
+  return `
+    <div class="page-header">
+
+      <div>
+        <h1>Colaboradores</h1>
+
+        <p>
+          Gestão da equipe operacional
+        </p>
+      </div>
+
+      <button
+        class="primary"
+        onclick="showEmployeeForm()">
+        + Novo Colaborador
+      </button>
+
+    </div>
+
+    <div id="formArea"></div>
+
+    <div class="panel">
+
+      <div class="toolbar">
+
+        <input
+          id="employeeSearch"
+          placeholder="Buscar nome ou matrícula..."
+          oninput="filterEmployees()">
+
+        <select
+          id="employeeContractFilter"
+          onchange="filterEmployees()">
+
+          <option value="">
+            Todos os contratos
+          </option>
+
+          ${activeContractsOptions()}
+
+        </select>
+
+      </div>
+
+      <div id="employeeTable">
+        ${employeeTable(cache.employees)}
+      </div>
+
+    </div>
+  `;
+}
+
+function employeeTable(items) {
+  if (!items.length) {
+    return empty(
+      "👥",
+      "Nenhum colaborador",
+      "Cadastre ou importe sua equipe."
+    );
+  }
+
+  return `
+    <div class="table-wrap">
+
+      <table class="data-table">
+
+        <thead>
+          <tr>
+            <th>Matrícula</th>
+            <th>Nome</th>
+            <th>Contrato</th>
+            <th>Posto</th>
+            <th>Função</th>
+            <th>Escala</th>
+            <th>Horário</th>
+            <th>HE 90d</th>
+            <th>WhatsApp</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          ${items.map(e => `
+            <tr>
+              <td>
+                ${esc(e.registration)}
+              </td>
+
+              <td>
+                <strong>
+                  ${esc(e.name)}
+                </strong>
+              </td>
+
+              <td>
+                ${esc(
+                  e.contract_name || "-"
+                )}
+              </td>
+
+              <td>
+                ${esc(
+                  e.post_name || "-"
+                )}
+              </td>
+
+              <td>
+                ${esc(e.role || "-")}
+              </td>
+
+              <td>
+                ${esc(e.shift || "-")}
+              </td>
+
+              <td>
+                ${esc(e.schedule || "-")}
+              </td>
+
+              <td>
+                ${moneyHours(
+                  e.overtime_90d
+                )}h
+              </td>
+
+              <td>
+                ${
+                  e.phone
+                    ? `<button
+                        class="wa-button"
+                        onclick="openWhatsApp(
+                          '${esc(e.phone)}',
+                          'Olá ${esc(e.name)}, tudo bem?'
+                        )">
+                        WhatsApp
+                      </button>`
+                    : "-"
+                }
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+
+      </table>
+    </div>
+  `;
+}
+
+function filterEmployees() {
+  const search =
+    document.getElementById(
+      "employeeSearch"
+    ).value.toLowerCase();
+
+  const contract =
+    document.getElementById(
+      "employeeContractFilter"
+    ).value;
+
+  const items =
+    cache.employees.filter(e => {
+      const matchesSearch =
+        e.name
+          .toLowerCase()
+          .includes(search) ||
+        e.registration
+          .toLowerCase()
+          .includes(search);
+
+      const matchesContract =
+        !contract ||
+        Number(e.contract_id) ===
+          Number(contract);
+
+      return (
+        matchesSearch &&
+        matchesContract
+      );
+    });
+
+  document.getElementById(
+    "employeeTable"
+  ).innerHTML =
+    employeeTable(items);
+}
+
+function showEmployeeForm() {
+  document.getElementById("formArea").innerHTML = `
+    <div class="panel form-panel">
+
+      <div class="panel-title">
+        <h3>Novo Colaborador</h3>
+
+        <button
+          onclick="
+            document.getElementById('formArea').innerHTML=''
+          ">
+          ✕
+        </button>
+      </div>
+
+      <form
+        class="form-grid"
+        onsubmit="saveEmployee(event)">
+
+        <label>
+          Matrícula
+          <input
+            id="employeeRegistration"
+            required>
+        </label>
+
+        <label>
+          Nome
+          <input
+            id="employeeName"
+            required>
+        </label>
+
+        <label>
+          WhatsApp
+          <input
+            id="employeePhone"
+            placeholder="62999999999">
+        </label>
+
+        <label>
+          Contrato
+          <select
+            id="employeeContract"
+            onchange="updateEmployeePosts()">
+
+            <option value="">
+              Selecione
+            </option>
+
+            ${activeContractsOptions()}
+
+          </select>
+        </label>
+
+        <label>
+          Posto
+          <select id="employeePost">
+            <option value="">
+              Selecione o contrato
+            </option>
+          </select>
+        </label>
+
+        <label>
+          Função
+          <input
+            id="employeeRole"
+            placeholder="Vigilante, ASG...">
+        </label>
+
+        <label>
+          Escala
+          <select id="employeeShift">
+            <option value="">
+              Selecione
+            </option>
+            <option value="IMPAR">
+              Ímpar
+            </option>
+            <option value="PAR">
+              Par
+            </option>
+          </select>
+        </label>
+
+        <label>
+          Horário
+          <input
+            id="employeeSchedule"
+            placeholder="07:00 às 19:00">
+        </label>
+
+        <div class="form-actions">
+          <button class="primary">
+            Salvar Colaborador
+          </button>
+        </div>
+
+      </form>
+    </div>
+  `;
+}
+
+function updateEmployeePosts() {
+  const contractId =
+    document.getElementById(
+      "employeeContract"
+    ).value;
+
+  const posts =
+    cache.posts.filter(
+      p =>
+        Number(p.contract_id) ===
+        Number(contractId) &&
+        p.active
+    );
+
+  document.getElementById(
+    "employeePost"
+  ).innerHTML = `
+    <option value="">
+      Sem posto definido
+    </option>
+
+    ${posts.map(p => `
+      <option value="${p.id}">
+        ${esc(p.name)}
+      </option>
+    `).join("")}
+  `;
+}
+
+async function saveEmployee(event) {
+  event.preventDefault();
+
+  try {
+    await api("/api/employees", {
+      method: "POST",
+      body: JSON.stringify({
+        registration:
+          document.getElementById(
+            "employeeRegistration"
+          ).value,
+
+        name:
+          document.getElementById(
+            "employeeName"
+          ).value,
+
+        phone:
+          document.getElementById(
+            "employeePhone"
+          ).value,
+
+        contract_id:
+          document.getElementById(
+            "employeeContract"
+          ).value || null,
+
+        post_id:
+          document.getElementById(
+            "employeePost"
+          ).value || null,
+
+        role:
+          document.getElementById(
+            "employeeRole"
+          ).value,
+
+        shift:
+          document.getElementById(
+            "employeeShift"
+          ).value,
+
+        schedule:
+          document.getElementById(
+            "employeeSchedule"
+          ).value
+      })
+    });
+
+    notify("Colaborador salvo.");
+    render("colaboradores");
+
+  } catch (error) {
+    notify(error.message, "error");
+  }
+}
+
+/* =========================
+   IMPORTAÇÃO
+========================= */
+
+function importPage() {
+  return `
+    <div class="page-header">
+
+      <div>
+        <h1>Importar Planilha</h1>
+
+        <p>
+          Cadastro e atualização em massa
+        </p>
+      </div>
+
+    </div>
+
+    <div class="import-grid">
+
+      <div class="panel">
+
+        <h3>
+          👥 Colaboradores
+        </h3>
+
+        <p class="muted">
+          Excel ou CSV com matrícula,
+          nome, CR, telefone, posto,
+          função, escala e horário.
+        </p>
+
+        <input
+          type="file"
+          id="employeeFile"
+          accept=".xlsx,.xls,.csv">
+
+        <button
+          class="primary"
+          onclick="importEmployees()">
+          Importar colaboradores
+        </button>
+
+        <div
+          id="employeeImportResult"
+          class="import-result">
+        </div>
+
+      </div>
+
+      <div class="panel">
+
+        <h3>
+          ⏱️ Horas Extras
+        </h3>
+
+        <p class="muted">
+          Colunas: Matrícula, Data
+          e Horas Extras.
+        </p>
+
+        <input
+          type="file"
+          id="overtimeFile"
+          accept=".xlsx,.xls,.csv">
+
+        <button
+          class="primary"
+          onclick="importOvertime()">
+          Importar horas extras
+        </button>
+
+        <div
+          id="overtimeImportResult"
+          class="import-result">
+        </div>
+
+      </div>
+
+    </div>
+  `;
+}
+
+async function importEmployees() {
+  const file =
+    document.getElementById(
+      "employeeFile"
+    ).files[0];
+
+  if (!file) {
+    return notify(
+      "Selecione uma planilha.",
+      "error"
+    );
+  }
+
+  const form = new FormData();
+  form.append("file", file);
+
+  try {
+    const data =
+      await api(
+        "/api/import/employees",
+        {
+          method: "POST",
+          body: form
+        }
+      );
+
+    document.getElementById(
+      "employeeImportResult"
+    ).innerHTML = `
+      <strong>
+        ${data.imported}
+      </strong>
+      colaboradores importados.
+
+      ${
+        data.skipped
+          ? `<br>${data.skipped} ignorados.`
+          : ""
+      }
+
+      ${
+        data.unknownContracts?.length
+          ? `
+            <br><br>
+            <strong>
+              CRs não encontrados:
+            </strong>
+            ${data.unknownContracts
+              .map(esc)
+              .join(", ")}
+          `
+          : ""
+      }
+    `;
+
+    notify("Importação concluída.");
+
+  } catch (error) {
+    notify(error.message, "error");
+  }
+}
+
+async function importOvertime() {
+  const file =
+    document.getElementById(
+      "overtimeFile"
+    ).files[0];
+
+  if (!file) {
+    return notify(
+      "Selecione uma planilha.",
+      "error"
+    );
+  }
+
+  const form = new FormData();
+  form.append("file", file);
+
+  try {
+    const data =
+      await api(
+        "/api/import/overtime",
+        {
+          method: "POST",
+          body: form
+        }
+      );
+
+    document.getElementById(
+      "overtimeImportResult"
+    ).innerHTML = `
+      <strong>
+        ${data.imported}
+      </strong>
+      registros importados.
+
+      ${
+        data.skipped
+          ? `<br>${data.skipped} ignorados.`
+          : ""
+      }
+    `;
+
+    notify(
+      "Horas extras importadas."
+    );
+
+  } catch (error) {
+    notify(error.message, "error");
+  }
+}
+
+/* =========================
+   COBERTURAS IA
+========================= */
+
+async function coveragesPage() {
+  cache.contracts =
+    await api("/api/contracts");
+
+  cache.posts =
+    await api("/api/posts");
+
+  cache.employees =
+    await api("/api/employees");
+
+  cache.coverages =
+    await api("/api/coverages");
+
+  return `
+    <div class="page-header">
+      <div>
+        <h1>Coberturas IA</h1>
+        <p>
+          Localize e priorize colaboradores
+          para cobertura de faltas
+        </p>
+      </div>
+
+      <button
+        class="primary"
+        onclick="showCoverageForm()">
+        + Nova Cobertura
+      </button>
+    </div>
+
+    <div id="coverageArea"></div>
+
+    <div class="panel">
+
+      <div class="panel-title">
+        <h3>
+          Histórico de Coberturas
+        </h3>
+
+        <span>
+          ${cache.coverages.length}
+        </span>
+      </div>
+
+      ${
+        cache.coverages.length
+          ? `
+            <div class="table-wrap">
+              <table class="data-table">
+
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Contrato</th>
+                    <th>Posto</th>
+                    <th>Ausente</th>
+                    <th>Escala</th>
+                    <th>Cobertura</th>
+                    <th>Status</th>
+                    <th>Ação</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  ${cache.coverages.map(c => `
+                    <tr>
+
+                      <td>
+                        ${dateBR(
+                          c.coverage_date
+                        )}
+                      </td>
+
+                      <td>
+                        ${esc(
+                          c.contract_name ||
+                          "-"
+                        )}
+                      </td>
+
+                      <td>
+                        ${esc(
+                          c.post_name ||
+                          "-"
+                        )}
+                      </td>
+
+                      <td>
+                        ${esc(
+                          c.absent_name ||
+                          "-"
+                        )}
+                      </td>
+
+                      <td>
+                        ${esc(
+                          c.shift ||
+                          "-"
+                        )}
+                      </td>
+
+                      <td>
+                        ${esc(
+                          c.selected_name ||
+                          "-"
+                        )}
+                      </td>
+
+                      <td>
+                        ${statusBadge(
+                          c.status
+                        )}
+                      </td>
+
+                      <td>
+                        <button
+                          class="small-button"
+                          onclick="
+                            viewCandidates(
+                              ${c.id}
+                            )
+                          ">
+                          Candidatos
+                        </button>
+                      </td>
+
+                    </tr>
+                  `).join("")}
+                </tbody>
+
+              </table>
+            </div>
+          `
+          : empty(
+              "🤖",
+              "Nenhuma cobertura",
+              "Crie a primeira cobertura para iniciar a priorização."
+            )
+      }
+
+    </div>
+  `;
+}
+
+function showCoverageForm() {
+  document.getElementById(
+    "coverageArea"
+  ).innerHTML = `
+    <div class="panel form-panel">
+
+      <div class="panel-title">
+        <h3>
+          Nova Cobertura
+        </h3>
+
+        <button
+          onclick="
+            document.getElementById(
+              'coverageArea'
+            ).innerHTML=''
+          ">
+          ✕
+        </button>
+      </div>
+
+      <form
+        class="form-grid"
+        onsubmit="
+          generateCoverage(event)
+        ">
+
+        <label>
+          Contrato
+          <select
+            id="coverageContract"
+            required
+            onchange="
+              updateCoverageDependencies()
+            ">
+
+            <option value="">
+              Selecione
+            </option>
+
+            ${activeContractsOptions()}
+
+          </select>
+        </label>
+
+        <label>
+          Posto
+          <select id="coveragePost">
+
+            <option value="">
+              Selecione o contrato
+            </option>
+
+          </select>
+        </label>
+
+        <label>
+          Colaborador ausente
+          <select
+            id="coverageAbsent"
+            onchange="
+              updateCoverageShift()
+            ">
+
+            <option value="">
+              Não informado
+            </option>
+
+          </select>
+        </label>
+
+        <label>
+          Escala do ausente
+          <select id="coverageShift">
+
+            <option value="">
+              Selecione
+            </option>
+
+            <option value="IMPAR">
+              Ímpar
+            </option>
+
+            <option value="PAR">
+              Par
+            </option>
+
+          </select>
+        </label>
+
+        <label>
+          Data da cobertura
+          <input
+            id="coverageDate"
+            type="date"
+            required>
+        </label>
+
+        <label>
+          Motivo
+          <input
+            id="coverageReason"
+            placeholder="
+              Falta, atestado, férias...
+            ">
+        </label>
+
+        <div class="form-actions">
+          <button class="primary">
+            Gerar candidatos
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  `;
+
+  document.getElementById(
+    "coverageDate"
+  ).value =
+    new Date()
+      .toISOString()
+      .slice(0, 10);
+}
+
+function updateCoverageDependencies() {
+  const contractId =
+    Number(
+      document.getElementById(
+        "coverageContract"
+      ).value
+    );
+
+  const posts =
+    cache.posts.filter(
+      p =>
+        Number(p.contract_id) ===
+        contractId &&
+        p.active
+    );
+
+  const employees =
+    cache.employees.filter(
+      e =>
+        Number(e.contract_id) ===
+        contractId &&
+        e.active
+    );
+
+  document.getElementById(
+    "coveragePost"
+  ).innerHTML = `
+    <option value="">
+      Sem posto definido
+    </option>
+
+    ${posts.map(p => `
+      <option value="${p.id}">
+        ${esc(p.name)}
+      </option>
+    `).join("")}
+  `;
+
+  document.getElementById(
+    "coverageAbsent"
+  ).innerHTML = `
+    <option value="">
+      Não informado
+    </option>
+
+    ${employees.map(e => `
+      <option value="${e.id}">
+        ${esc(e.name)}
+        - ${esc(e.registration)}
+      </option>
+    `).join("")}
+  `;
+}
+
+function updateCoverageShift() {
+  const employeeId =
+    Number(
+      document.getElementById(
+        "coverageAbsent"
+      ).value
+    );
+
+  const employee =
+    cache.employees.find(
+      e => e.id === employeeId
+    );
+
+  if (employee?.shift) {
+    document.getElementById(
+      "coverageShift"
+    ).value =
+      employee.shift;
+  }
+}
+
+async function generateCoverage(event) {
+  event.preventDefault();
+
+  try {
+    const data =
+      await api(
+        "/api/coverages",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            contract_id:
+              document.getElementById(
+                "coverageContract"
+              ).value,
+
+            post_id:
+              document.getElementById(
+                "coveragePost"
+              ).value || null,
+
+            absent_employee_id:
+              document.getElementById(
+                "coverageAbsent"
+              ).value || null,
+
+            shift:
+              document.getElementById(
+                "coverageShift"
+              ).value,
+
+            coverage_date:
+              document.getElementById(
+                "coverageDate"
+              ).value,
+
+            reason:
+              document.getElementById(
+                "coverageReason"
+              ).value
+          })
+        }
+      );
+
+    notify(
+      `${data.candidates.length} candidatos encontrados.`
+    );
+
+    showCoverageCandidates(
+      data.coverage,
+      data.candidates
+    );
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+function showCoverageCandidates(
+  coverage,
+  candidates
+) {
+  document.getElementById(
+    "coverageArea"
+  ).innerHTML = `
+    <div class="panel">
+
+      <div class="panel-title">
+        <div>
+          <h3>
+            Ranking de candidatos
+          </h3>
+
+          <p class="muted">
+            Priorização automática do
+            OPERA IA
+          </p>
+        </div>
+
+        <span>
+          ${candidates.length}
+          encontrados
+        </span>
+      </div>
+
+      ${
+        candidates.length
+          ? `
+            <div class="candidate-list">
+
+              ${candidates.map(
+                (e, index) => `
+                <div
+                  class="candidate-card">
+
+                  <div
+                    class="candidate-position">
+                    ${index + 1}
+                  </div>
+
+                  <div
+                    class="candidate-info">
+
+                    <strong>
+                      ${esc(e.name)}
+                    </strong>
+
+                    <span>
+                      ${esc(
+                        e.registration
+                      )}
+                      •
+                      ${esc(
+                        e.role || "-"
+                      )}
+                    </span>
+
+                    <small>
+                      ${
+                        Number(
+                          e.contract_id
+                        ) ===
+                        Number(
+                          coverage.contract_id
+                        )
+                          ? "Mesmo contrato"
+                          : "Outro contrato"
+                      }
+                      •
+                      Escala:
+                      ${esc(
+                        e.shift || "-"
+                      )}
+                      •
+                      HE 90d:
+                      ${moneyHours(
+                        e.overtime_90d
+                      )}h
+                    </small>
+
+                  </div>
+
+                  <div
+                    class="candidate-score">
+                    ${Number(
+                      e.score
+                    ).toFixed(0)}
+                    pts
+                  </div>
+
+                  <div
+                    class="candidate-actions">
+
+                    ${
+                      e.phone
+                        ? `
+                          <button
+                            class="wa-button"
+                            onclick="
+                              contactCoverage(
+                                ${coverage.id},
+                                ${e.id},
+                                '${esc(
+                                  e.phone
+                                )}',
+                                '${esc(
+                                  e.name
+                                )}'
+                              )
+                            ">
+                            WhatsApp
+                          </button>
+                        `
+                        : `
+                          <span
+                            class="muted">
+                            Sem telefone
+                          </span>
+                        `
+                    }
+
+                    <button
+                      class="primary"
+                      onclick="
+                        confirmCoverage(
+                          ${coverage.id},
+                          ${e.id},
+                          '${esc(
+                            e.name
+                          )}'
+                        )
+                      ">
+                      Confirmar
+                    </button>
+
+                  </div>
+
+                </div>
+              `).join("")}
+
+            </div>
+          `
+          : empty(
+              "🔎",
+              "Nenhum candidato encontrado",
+              "Verifique escala e colaboradores cadastrados."
+            )
+      }
+
+    </div>
+  `;
+}
+
+async function viewCandidates(
+  coverageId
+) {
+  try {
+    const candidates =
+      await api(
+        `/api/coverages/${coverageId}/candidates`
+      );
+
+    const coverage =
+      cache.coverages.find(
+        c => c.id === coverageId
+      ) || {
+        id: coverageId
+      };
+
+    showCoverageCandidates(
+      coverage,
+      candidates
+    );
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth"
+    });
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+async function contactCoverage(
+  coverageId,
+  employeeId,
+  phone,
+  name
+) {
+  try {
+    const coverage =
+      cache.coverages.find(
+        c => c.id === coverageId
+      );
+
+    const message =
+      `Olá ${name}, tudo bem? ` +
+      `Temos uma oportunidade de ` +
+      `cobertura extra` +
+      `${
+        coverage?.contract_name
+          ? ` no contrato ${coverage.contract_name}`
+          : ""
+      }` +
+      `${
+        coverage?.coverage_date
+          ? ` para o dia ${dateBR(
+              coverage.coverage_date
+            )}`
+          : ""
+      }. ` +
+      `Você possui disponibilidade?`;
+
+    await api(
+      `/api/coverages/${coverageId}/contact/${employeeId}`,
+      { method: "POST" }
+    );
+
+    await openWhatsApp(
+      phone,
+      message
+    );
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+async function confirmCoverage(
+  coverageId,
+  employeeId,
+  employeeName
+) {
+  if (
+    !confirm(
+      `Confirmar ${employeeName} para esta cobertura?`
+    )
+  ) {
+    return;
+  }
+
+  try {
+    await api(
+      `/api/coverages/${coverageId}/confirm/${employeeId}`,
+      { method: "POST" }
+    );
+
+    notify(
+      "Cobertura confirmada."
+    );
+
+    render("coberturas");
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+/* =========================
+   HORAS EXTRAS
+========================= */
+
+async function overtimePage() {
+  cache.employees =
+    await api("/api/employees");
+
+  const overtime =
+    await api("/api/overtime");
+
+  return `
+    <div class="page-header">
+
+      <div>
+        <h1>Horas Extras</h1>
+        <p>
+          Histórico de extras
+          por colaborador
+        </p>
+      </div>
+
+      <button
+        class="primary"
+        onclick="
+          showOvertimeForm()
+        ">
+        + Registrar HE
+      </button>
+
+    </div>
+
+    <div id="formArea"></div>
+
+    <div class="panel">
+
+      ${
+        overtime.length
+          ? `
+            <div class="table-wrap">
+
+              <table
+                class="data-table">
+
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Matrícula</th>
+                    <th>Colaborador</th>
+                    <th>Contrato</th>
+                    <th>Horas</th>
+                    <th>Descrição</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+
+                  ${overtime.map(o => `
+                    <tr>
+
+                      <td>
+                        ${dateBR(
+                          o.work_date
+                        )}
+                      </td>
+
+                      <td>
+                        ${esc(
+                          o.registration
+                        )}
+                      </td>
+
+                      <td>
+                        <strong>
+                          ${esc(
+                            o.employee_name
+                          )}
+                        </strong>
+                      </td>
+
+                      <td>
+                        ${esc(
+                          o.contract_name ||
+                          "-"
+                        )}
+                      </td>
+
+                      <td>
+                        ${moneyHours(
+                          o.hours
+                        )}h
+                      </td>
+
+                      <td>
+                        ${esc(
+                          o.description ||
+                          "-"
+                        )}
+                      </td>
+
+                    </tr>
+                  `).join("")}
+
+                </tbody>
+
+              </table>
+
+            </div>
+          `
+          : empty(
+              "⏱️",
+              "Nenhuma hora extra",
+              "Registre manualmente ou importe uma planilha."
+            )
+      }
+
+    </div>
+  `;
+}
+
+function showOvertimeForm() {
+  document.getElementById(
+    "formArea"
+  ).innerHTML = `
+    <div class="panel form-panel">
+
+      <div class="panel-title">
+        <h3>
+          Registrar Hora Extra
+        </h3>
+      </div>
+
+      <form
+        class="form-grid"
+        onsubmit="
+          saveOvertime(event)
+        ">
+
+        <label>
+          Colaborador
+          <select
+            id="overtimeEmployee"
+            required>
+
+            <option value="">
+              Selecione
+            </option>
+
+            ${cache.employees
+              .filter(e => e.active)
+              .map(e => `
+                <option value="${e.id}">
+                  ${esc(e.name)}
+                  -
+                  ${esc(e.registration)}
+                </option>
+              `)
+              .join("")}
+
+          </select>
+        </label>
+
+        <label>
+          Data
+          <input
+            id="overtimeDate"
+            type="date"
+            required>
+        </label>
+
+        <label>
+          Quantidade de horas
+          <input
+            id="overtimeHours"
+            type="number"
+            step="0.01"
+            min="0"
+            required>
+        </label>
+
+        <label>
+          Descrição
+          <input
+            id="overtimeDescription"
+            placeholder="
+              Cobertura, dobra...
+            ">
+        </label>
+
+        <div class="form-actions">
+          <button class="primary">
+            Salvar
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  `;
+
+  document.getElementById(
+    "overtimeDate"
+  ).value =
+    new Date()
+      .toISOString()
+      .slice(0, 10);
+}
+
+async function saveOvertime(event) {
+  event.preventDefault();
+
+  try {
+    await api("/api/overtime", {
+      method: "POST",
+      body: JSON.stringify({
+        employee_id:
+          document.getElementById(
+            "overtimeEmployee"
+          ).value,
+
+        work_date:
+          document.getElementById(
+            "overtimeDate"
+          ).value,
+
+        hours:
+          document.getElementById(
+            "overtimeHours"
+          ).value,
+
+        description:
+          document.getElementById(
+            "overtimeDescription"
+          ).value
+      })
+    });
+
+    notify(
+      "Hora extra registrada."
+    );
+
+    render("extras");
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+/* =========================
+   FOLHA / TREINAMENTO
+========================= */
+
+async function requestPage(type) {
+  cache.contracts =
+    await api("/api/contracts");
+
+  cache.employees =
+    await api("/api/employees");
+
+  const allRequests =
+    await api("/api/requests");
+
+  const items =
+    allRequests.filter(
+      r => r.type === type
+    );
+
+  const isPoint =
+    type === "FOLHA_PONTO";
+
+  const title =
+    isPoint
+      ? "Folha de Ponto"
+      : "Treinamentos GPS VC";
+
+  const icon =
+    isPoint ? "📄" : "🎓";
+
+  return `
+    <div class="page-header">
+
+      <div>
+        <h1>
+          ${title}
+        </h1>
+
+        <p>
+          ${
+            isPoint
+              ? "Solicitação de assinatura aos colaboradores"
+              : "Controle de treinamentos pendentes"
+          }
+        </p>
+      </div>
+
+      <button
+        class="primary"
+        onclick="
+          showRequestForm(
+            '${type}'
+          )
+        ">
+        + Nova Solicitação
+      </button>
+
+    </div>
+
+    <div id="requestArea"></div>
+
+    <div class="panel">
+
+      ${
+        items.length
+          ? requestTable(items)
+          : empty(
+              icon,
+              "Nenhuma solicitação",
+              "Crie uma solicitação para os colaboradores."
+            )
+      }
+
+    </div>
+  `;
+}
+
+function showRequestForm(type) {
+  const isPoint =
+    type === "FOLHA_PONTO";
+
+  document.getElementById(
+    "requestArea"
+  ).innerHTML = `
+    <div class="panel form-panel">
+
+      <div class="panel-title">
+        <h3>
+          Nova Solicitação
+        </h3>
+      </div>
+
+      <div class="form-grid">
+
+        <label>
+          Contrato
+          <select
+            id="requestContract"
+            onchange="
+              updateRequestEmployees()
+            ">
+
+            <option value="">
+              Todos
+            </option>
+
+            ${activeContractsOptions()}
+
+          </select>
+        </label>
+
+        <label>
+          ${
+            isPoint
+              ? "Mês de referência"
+              : "Referência"
+          }
+
+          <input
+            id="requestReference"
+            ${
+              isPoint
+                ? 'type="month"'
+                : ""
+            }
+            placeholder="
+              Ex.: Treinamentos pendentes
+            ">
+        </label>
+
+        <label class="full">
+          Mensagem
+
+          <textarea
+            id="requestMessage"
+            rows="3">${
+              isPoint
+                ? "favor assinar sua folha de ponto referente ao período informado."
+                : "existem treinamentos pendentes no seu aplicativo GPS VC. Favor acessar e concluir."
+            }</textarea>
+        </label>
+
+      </div>
+
+      <div class="selection-header">
+
+        <strong>
+          Colaboradores
+        </strong>
+
+        <label
+          class="inline-check">
+
+          <input
+            type="checkbox"
+            id="selectAllEmployees"
+            onchange="
+              toggleAllRequestEmployees()
+            ">
+
+          Selecionar todos
+
+        </label>
+
+      </div>
+
+      <div
+        id="requestEmployees"
+        class="employee-selection">
+      </div>
+
+      <div class="form-actions">
+
+        <button
+          class="primary"
+          onclick="
+            createRequests(
+              '${type}'
+            )
+          ">
+          Criar Solicitações
+        </button>
+
+      </div>
+
+    </div>
+  `;
+
+  updateRequestEmployees();
+}
+
+function updateRequestEmployees() {
+  const contractId =
+    document.getElementById(
+      "requestContract"
+    )?.value || "";
+
+  const employees =
+    cache.employees.filter(
+      e =>
+        e.active &&
+        (
+          !contractId ||
+          Number(e.contract_id) ===
+            Number(contractId)
+        )
+    );
+
+  document.getElementById(
+    "requestEmployees"
+  ).innerHTML =
+    employees.length
+      ? employees.map(e => `
+          <label
+            class="employee-check">
+
+            <input
+              type="checkbox"
+              class="requestEmployee"
+              value="${e.id}">
+
+            <span>
+              <strong>
+                ${esc(e.name)}
+              </strong>
+
+              <small>
+                ${esc(e.registration)}
+                •
+                ${esc(
+                  e.contract_name ||
+                  "-"
+                )}
+              </small>
+            </span>
+
+          </label>
+        `).join("")
+      : `
+          <p class="muted">
+            Nenhum colaborador.
+          </p>
+        `;
+}
+
+function toggleAllRequestEmployees() {
+  const checked =
+    document.getElementById(
+      "selectAllEmployees"
+    ).checked;
+
+  document
+    .querySelectorAll(
+      ".requestEmployee"
+    )
+    .forEach(
+      input =>
+        input.checked = checked
+    );
+}
+
+async function createRequests(type) {
+  const employeeIds =
+    Array.from(
+      document.querySelectorAll(
+        ".requestEmployee:checked"
+      )
+    ).map(
+      input =>
+        Number(input.value)
+    );
+
+  if (!employeeIds.length) {
+    return notify(
+      "Selecione pelo menos um colaborador.",
+      "error"
+    );
+  }
+
+  const reference =
+    document.getElementById(
+      "requestReference"
+    ).value;
+
+  const baseMessage =
+    document.getElementById(
+      "requestMessage"
+    ).value;
+
+  try {
+    /*
+      Criação individual para permitir
+      mensagem personalizada com o nome.
+    */
+    for (const employeeId of employeeIds) {
+      const employee =
+        cache.employees.find(
+          e => e.id === employeeId
+        );
+
+      let message =
+        `${employee.name}, ${baseMessage}`;
+
+      if (
+        type === "FOLHA_PONTO" &&
+        reference
+      ) {
+        const [year, month] =
+          reference.split("-");
+
+        message =
+          `${employee.name}, favor assinar sua folha de ponto referente ao mês ` +
+          `${month}/${year}.`;
+      }
+
+      await api(
+        "/api/requests",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            employee_ids: [
+              employeeId
+            ],
+            type,
+            reference,
+            message
+          })
+        }
+      );
+    }
+
+    notify(
+      `${employeeIds.length} solicitações criadas.`
+    );
+
+    render(
+      type === "FOLHA_PONTO"
+        ? "ponto"
+        : "treinamentos"
+    );
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+function requestTable(items) {
+  return `
+    <div class="table-wrap">
+
+      <table class="data-table">
+
+        <thead>
+          <tr>
+            <th>Colaborador</th>
+            <th>Contrato</th>
+            <th>Referência</th>
+            <th>Status</th>
+            <th>WhatsApp</th>
+            <th>Concluir</th>
+          </tr>
+        </thead>
+
+        <tbody>
+
+          ${items.map(r => `
+            <tr>
+
+              <td>
+                <strong>
+                  ${esc(
+                    r.employee_name
+                  )}
+                </strong>
+
+                <br>
+
+                <small>
+                  ${esc(
+                    r.registration
+                  )}
+                </small>
+              </td>
+
+              <td>
+                ${esc(
+                  r.contract_name ||
+                  "-"
+                )}
+              </td>
+
+              <td>
+                ${esc(
+                  r.reference ||
+                  "-"
+                )}
+              </td>
+
+              <td>
+                ${statusBadge(
+                  r.status
+                )}
+              </td>
+
+              <td>
+                ${
+                  r.phone
+                    ? `
+                      <button
+                        class="wa-button"
+                        onclick="
+                          sendRequestWhatsApp(
+                            ${r.id},
+                            '${esc(
+                              r.phone
+                            )}',
+                            '${encodeURIComponent(
+                              r.message || ""
+                            )}'
+                          )
+                        ">
+                        Enviar
+                      </button>
+                    `
+                    : "-"
+                }
+              </td>
+
+              <td>
+                ${
+                  ![
+                    "ASSINADO",
+                    "CONCLUIDO"
+                  ].includes(
+                    r.status
+                  )
+                    ? `
+                      <button
+                        class="small-button"
+                        onclick="
+                          completeRequest(
+                            ${r.id},
+                            '${r.type}'
+                          )
+                        ">
+                        Concluir
+                      </button>
+                    `
+                    : "✓"
+                }
+              </td>
+
+            </tr>
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+}
+
+async function sendRequestWhatsApp(
+  requestId,
+  phone,
+  encodedMessage
+) {
+  try {
+    const message =
+      decodeURIComponent(
+        encodedMessage
+      );
+
+    await openWhatsApp(
+      phone,
+      message
+    );
+
+    await api(
+      `/api/requests/${requestId}/status`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          status:
+            "MENSAGEM_ENVIADA"
+        })
+      }
+    );
+
+    notify(
+      "Mensagem preparada no WhatsApp."
+    );
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+async function completeRequest(
+  id,
+  type
+) {
+  const status =
+    type === "FOLHA_PONTO"
+      ? "ASSINADO"
+      : "CONCLUIDO";
+
+  try {
+    await api(
+      `/api/requests/${id}/status`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          status
+        })
+      }
+    );
+
+    notify(
+      "Pendência concluída."
+    );
+
+    render(
+      type === "FOLHA_PONTO"
+        ? "ponto"
+        : "treinamentos"
+    );
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+/* =========================
+   CENTRAL DE PENDÊNCIAS
+========================= */
+
+async function pendingPage() {
+  cache.requests =
+    await api("/api/requests");
+
+  const pending =
+    cache.requests.filter(
+      r =>
+        ![
+          "ASSINADO",
+          "CONCLUIDO",
+          "CANCELADO"
+        ].includes(r.status)
+    );
+
+  const point =
+    pending.filter(
+      r =>
+        r.type ===
+        "FOLHA_PONTO"
+    ).length;
+
+  const training =
+    pending.filter(
+      r =>
+        r.type ===
+        "TREINAMENTO"
+    ).length;
+
+  const others =
+    pending.length -
+    point -
+    training;
+
+  return `
+    <div class="page-header">
+
+      <div>
+        <h1>
+          Central de Pendências
+        </h1>
+
+        <p>
+          Tudo que precisa de
+          acompanhamento
+        </p>
+      </div>
+
+    </div>
+
+    <div class="cards">
+
+      ${card(
+        "Folhas de Ponto",
+        point,
+        "Pendentes"
+      )}
+
+      ${card(
+        "Treinamentos",
+        training,
+        "Pendentes"
+      )}
+
+      ${card(
+        "Outras solicitações",
+        others,
+        "Pendentes"
+      )}
+
+      ${card(
+        "Total",
+        pending.length,
+        "Aguardando ação"
+      )}
+
+    </div>
+
+    <div class="panel">
+
+      <div class="panel-title">
+
+        <h3>
+          Pendências abertas
+        </h3>
+
+        ${
+          pending.length
+            ? `
+              <button
+                class="primary"
+                onclick="
+                  sendAllPending()
+                ">
+                Enviar para todos
+              </button>
+            `
+            : ""
+        }
+
+      </div>
+
+      ${
+        pending.length
+          ? requestTable(pending)
+          : empty(
+              "✅",
+              "Nenhuma pendência",
+              "Todas as solicitações estão em dia."
+            )
+      }
+
+    </div>
+  `;
+}
+
+async function sendAllPending() {
+  const pending =
+    cache.requests.filter(
+      r =>
+        r.status ===
+          "PENDENTE" &&
+        r.phone &&
+        r.message
+    );
+
+  if (!pending.length) {
+    return notify(
+      "Não há mensagens pendentes com WhatsApp.",
+      "error"
+    );
+  }
+
+  /*
+    Navegadores bloqueiam múltiplas
+    abas automáticas. Abrimos a primeira
+    e marcamos somente ela como enviada.
+    A extensão futura poderá executar
+    lotes de 5.
+  */
+  const first =
+    pending[0];
+
+  await sendRequestWhatsApp(
+    first.id,
+    first.phone,
+    encodeURIComponent(
+      first.message
+    )
+  );
+
+  notify(
+    `1 de ${pending.length} mensagens aberta. Para disparos em lote usaremos a extensão OPERA IA.`
+  );
+}
+
+/* =========================
+   RELATÓRIOS
+========================= */
+
+async function reportsPage() {
+  const overtime =
+    await api(
+      "/api/reports/overtime"
+    );
+
+  const contracts =
+    await api(
+      "/api/reports/contracts"
+    );
+
+  return `
+    <div class="page-header">
+
+      <div>
+        <h1>Relatórios</h1>
+        <p>
+          Indicadores operacionais
+          do OPERA IA
+        </p>
+      </div>
+
+    </div>
+
+    <div class="report-grid">
+
+      <div class="panel">
+
+        <div class="panel-title">
+          <h3>
+            Horas Extras por Colaborador
+          </h3>
+        </div>
+
+        ${
+          overtime.length
+            ? `
+              <div class="table-wrap">
+
+                <table
+                  class="data-table">
+
+                  <thead>
+                    <tr>
+                      <th>Matrícula</th>
+                      <th>Colaborador</th>
+                      <th>Contrato</th>
+                      <th>Registros</th>
+                      <th>Total HE</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+
+                    ${overtime.map(e => `
+                      <tr>
+
+                        <td>
+                          ${esc(
+                            e.registration
+                          )}
+                        </td>
+
+                        <td>
+                          ${esc(
+                            e.name
+                          )}
+                        </td>
+
+                        <td>
+                          ${esc(
+                            e.contract_name ||
+                            "-"
+                          )}
+                        </td>
+
+                        <td>
+                          ${e.records}
+                        </td>
+
+                        <td>
+                          <strong>
+                            ${moneyHours(
+                              e.total_hours
+                            )}h
+                          </strong>
+                        </td>
+
+                      </tr>
+                    `).join("")}
+
+                  </tbody>
+
+                </table>
+
+              </div>
+            `
+            : empty(
+                "📈",
+                "Sem dados",
+                "Importe horas extras."
+              )
+        }
+
+      </div>
+
+      <div class="panel">
+
+        <div class="panel-title">
+          <h3>
+            Resumo por Contrato
+          </h3>
+        </div>
+
+        ${
+          contracts.length
+            ? `
+              <div class="table-wrap">
+
+                <table
+                  class="data-table">
+
+                  <thead>
+                    <tr>
+                      <th>CR</th>
+                      <th>Contrato</th>
+                      <th>Postos</th>
+                      <th>Colaboradores</th>
+                      <th>HE</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+
+                    ${contracts.map(c => `
+                      <tr>
+
+                        <td>
+                          ${esc(c.cr)}
+                        </td>
+
+                        <td>
+                          ${esc(c.name)}
+                        </td>
+
+                        <td>
+                          ${c.posts}
+                        </td>
+
+                        <td>
+                          ${c.employees}
+                        </td>
+
+                        <td>
+                          ${moneyHours(
+                            c.overtime_hours
+                          )}h
+                        </td>
+
+                      </tr>
+                    `).join("")}
+
+                  </tbody>
+
+                </table>
+
+              </div>
+            `
+            : empty(
+                "🏢",
+                "Sem contratos",
+                "Cadastre seus contratos."
+              )
+        }
+
+      </div>
+
+    </div>
+  `;
+}
+
+/* =========================
+   ADMINISTRAÇÃO
+========================= */
+
+async function adminPage() {
+  if (
+    currentUser?.role !== "ADM"
+  ) {
+    return `
+      <div class="page-header">
+        <div>
+          <h1>Administração</h1>
+        </div>
+      </div>
+
+      <div class="panel">
+        ${empty(
+          "🔒",
+          "Acesso restrito",
+          "Somente o administrador possui acesso."
+        )}
+      </div>
+    `;
+  }
+
+  const users =
+    await api("/api/users");
+
+  return `
+    <div class="page-header">
+
+      <div>
+        <h1>Administração</h1>
+
+        <p>
+          Usuários e níveis de acesso
+        </p>
+      </div>
+
+      <button
+        class="primary"
+        onclick="
+          showUserForm()
+        ">
+        + Novo Usuário
+      </button>
+
+    </div>
+
+    <div id="userArea"></div>
+
+    <div class="panel">
+
+      ${
+        users.length
+          ? `
+            <div class="table-wrap">
+
+              <table
+                class="data-table">
+
+                <thead>
+                  <tr>
+                    <th>Nome</th>
+                    <th>E-mail</th>
+                    <th>Perfil</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+
+                  ${users.map(u => `
+                    <tr>
+
+                      <td>
+                        <strong>
+                          ${esc(u.name)}
+                        </strong>
+                      </td>
+
+                      <td>
+                        ${esc(u.email)}
+                      </td>
+
+                      <td>
+                        ${statusBadge(
+                          u.role
+                        )}
+                      </td>
+
+                      <td>
+                        ${statusBadge(
+                          u.active
+                            ? "ATIVO"
+                            : "INATIVO"
+                        )}
+                      </td>
+
+                    </tr>
+                  `).join("")}
+
+                </tbody>
+
+              </table>
+
+            </div>
+          `
+          : empty(
+              "👤",
+              "Nenhum usuário",
+              ""
+            )
+      }
+
+    </div>
+  `;
+}
+
+function showUserForm() {
+  document.getElementById(
+    "userArea"
+  ).innerHTML = `
+    <div class="panel form-panel">
+
+      <div class="panel-title">
+        <h3>
+          Novo Usuário
+        </h3>
+      </div>
+
+      <form
+        class="form-grid"
+        onsubmit="
+          saveUser(event)
+        ">
+
+        <label>
+          Nome
+          <input
+            id="userName"
+            required>
+        </label>
+
+        <label>
+          E-mail
+          <input
+            id="userEmail"
+            type="email"
+            required>
+        </label>
+
+        <label>
+          Senha inicial
+          <input
+            id="userPassword"
+            type="password"
+            minlength="8"
+            required>
+        </label>
+
+        <label>
+          Perfil
+          <select
+            id="userRole"
+            required>
+
+            <option value="SUPERVISOR">
+              Supervisor
+            </option>
+
+            <option value="COORDENADOR">
+              Coordenador
+            </option>
+
+            <option value="ADM">
+              Administrador
+            </option>
+
+          </select>
+        </label>
+
+        <div class="form-actions">
+          <button class="primary">
+            Criar Usuário
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  `;
+}
+
+async function saveUser(event) {
+  event.preventDefault();
+
+  try {
+    await api("/api/users", {
+      method: "POST",
+      body: JSON.stringify({
+        name:
+          document.getElementById(
+            "userName"
+          ).value,
+
+        email:
+          document.getElementById(
+            "userEmail"
+          ).value,
+
+        password:
+          document.getElementById(
+            "userPassword"
+          ).value,
+
+        role:
+          document.getElementById(
+            "userRole"
+          ).value
+      })
+    });
+
+    notify(
+      "Usuário criado."
+    );
+
+    render("administracao");
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+/* =========================
+   WHATSAPP
+========================= */
+
+async function openWhatsApp(
+  phone,
+  message
+) {
+  try {
+    const data =
+      await api(
+        "/api/whatsapp/message",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            phone,
+            message
+          })
+        }
+      );
+
+    window.open(
+      data.url,
+      "_blank"
+    );
+
+  } catch (error) {
+    notify(
+      error.message,
+      "error"
+    );
+  }
+}
+
+/* =========================
+   HELPERS
+========================= */
+
+function activeContractsOptions() {
+  return cache.contracts
+    .filter(c => c.active)
+    .map(c => `
+      <option value="${c.id}">
+        ${esc(c.cr)}
+        -
+        ${esc(c.name)}
+      </option>
+    `)
+    .join("");
+}
+
+function statusBadge(status = "") {
+  const value =
+    String(status)
+      .toUpperCase();
+
+  let css = "neutral-badge";
+
+  if (
+    [
+      "ATIVO",
+      "CONFIRMADA",
+      "ASSINADO",
+      "CONCLUIDO",
+      "CONFIRMADO"
+    ].includes(value)
+  ) {
+    css = "active-badge";
+  }
+
+  if (
+    [
+      "PENDENTE",
+      "ABERTA",
+      "MENSAGEM_ENVIADA"
+    ].includes(value)
+  ) {
+    css = "warning-badge";
+  }
+
+  if (
+    [
+      "INATIVO",
+      "CANCELADO"
+    ].includes(value)
+  ) {
+    css = "inactive-badge";
+  }
+
+  return `
+    <span
+      class="badge ${css}">
+      ${esc(
+        value.replaceAll("_", " ")
+      )}
+    </span>
+  `;
+}
+
+function empty(
+  icon,
+  title,
+  text
+) {
+  return `
+    <div class="empty">
+
+      <div class="empty-icon">
+        ${icon}
+      </div>
+
+      <h3>
+        ${esc(title)}
+      </h3>
+
+      ${
+        text
+          ? `<p>${esc(text)}</p>`
+          : ""
+      }
+
+    </div>
+  `;
+}
+
+/* =========================
+   INICIALIZAÇÃO
+========================= */
 
 async function start() {
   try {
     const setup =
-      await api("/api/setup-status");
+      await api(
+        "/api/setup-status"
+      );
 
     if (setup.needsSetup) {
       setupScreen();
@@ -969,7 +3794,9 @@ async function start() {
 
       localStorage.setItem(
         "opera_user",
-        JSON.stringify(currentUser)
+        JSON.stringify(
+          currentUser
+        )
       );
 
       render("dashboard");
@@ -984,18 +3811,25 @@ async function start() {
 
         <div class="auth-card">
 
-          <div class="auth-logo">
+          <div
+            class="auth-logo">
             O
           </div>
 
           <h1>OPERA IA</h1>
+
+          <div
+            class="auth-divider">
+          </div>
 
           <h2>
             Sistema indisponível
           </h2>
 
           <p>
-            ${escapeHtml(error.message)}
+            ${esc(
+              error.message
+            )}
           </p>
 
         </div>
