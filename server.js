@@ -134,6 +134,33 @@ async function init() {
       PRIMARY KEY (user_id, contract_id)
     );
 
+  ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS post_id INTEGER REFERENCES posts(id);
+
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS role VARCHAR(120);
+
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS shift VARCHAR(40);
+
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS schedule VARCHAR(80);
+
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE;
+
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS phone VARCHAR(40);
+
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS contract_id INTEGER REFERENCES contracts(id); 
+    
+    
+    
+    
     CREATE INDEX IF NOT EXISTS idx_employees_contract
       ON employees(contract_id);
 
