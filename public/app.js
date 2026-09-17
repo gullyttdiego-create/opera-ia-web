@@ -1096,6 +1096,153 @@ function employeeTable(items) {
             <th>Horário</th>
             <th>HE 90d</th>
             <th>WhatsApp</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+
+        <tbody>
+
+          ${items.map(e => `
+            <tr>
+
+              <td>
+                ${esc(e.registration)}
+              </td>
+
+              <td>
+                <strong>
+                  ${esc(e.name)}
+                </strong>
+              </td>
+
+              <td>
+                ${esc(e.contract_name || "-")}
+              </td>
+
+              <td>
+                ${esc(e.post_name || "-")}
+              </td>
+
+              <td>
+                ${esc(e.role || "-")}
+              </td>
+
+              <td>
+                ${esc(e.shift || "-")}
+              </td>
+
+              <td>
+                ${esc(e.schedule || "-")}
+              </td>
+
+              <td>
+                ${moneyHours(e.overtime_90d || 0)}
+              </td>
+
+              <td>
+                ${
+                  e.phone
+                    ? `
+                      <button
+                        class="wa-button"
+                        onclick="openWhatsApp(
+                          '${esc(e.phone)}',
+                          'Olá ${esc(e.name)}, tudo bem?'
+                        )">
+                        WhatsApp
+                      </button>
+                    `
+                    : "-"
+                }
+              </td>
+
+              <td>
+                <button
+                  class="btn-secondary btn-small"
+                  onclick="editEmployee(${e.id})">
+                  ✏️ Editar
+                </button>
+              </td>
+
+            </tr>
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+}
+function editEmployee(id) {
+  const employee = cache.employees.find(
+    e => Number(e.id) === Number(id)
+  );
+
+  if (!employee) {
+    notify("Colaborador não encontrado.", "error");
+    return;
+  }
+
+  showEmployeeForm();
+
+  setTimeout(() => {
+    document.getElementById("employeeRegistration").value =
+      employee.registration || "";
+
+    document.getElementById("employeeName").value =
+      employee.name || "";
+
+    document.getElementById("employeePhone").value =
+      employee.phone || "";
+
+    document.getElementById("employeeContract").value =
+      employee.contract_id || "";
+
+    document.getElementById("employeePost").value =
+      employee.post_id || "";
+
+    document.getElementById("employeeRole").value =
+      employee.role || "";
+
+    document.getElementById("employeeShift").value =
+      employee.shift || "";
+
+    document.getElementById("employeeSchedule").value =
+      employee.schedule || "";
+
+    const form = document.querySelector("#formArea form");
+
+    if (form) {
+      form.dataset.employeeId = employee.id;
+    }
+
+    document
+      .getElementById("formArea")
+      .scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+
+  }, 0);
+}
+
+  return `
+    <div class="table-wrap">
+
+      <table class="data-table">
+
+        <thead>
+          <tr>
+            <th>Matrícula</th>
+            <th>Nome</th>
+            <th>Contrato</th>
+            <th>Posto</th>
+            <th>Função</th>
+            <th>Escala</th>
+            <th>Horário</th>
+            <th>HE 90d</th>
+            <th>WhatsApp</th>
           </tr>
         </thead>
 
@@ -1339,142 +1486,97 @@ function updateEmployeePosts() {
 async function saveEmployee(event) {
   event.preventDefault();
 
+  const form = event.target;
+
+  const employeeId =
+    form.dataset.employeeId || null;
+
+  const body = {
+    registration:
+      document.getElementById(
+        "employeeRegistration"
+      ).value.trim(),
+
+    name:
+      document.getElementById(
+        "employeeName"
+      ).value.trim(),
+
+    phone:
+      document.getElementById(
+        "employeePhone"
+      ).value.trim(),
+
+    contract_id:
+      document.getElementById(
+        "employeeContract"
+      ).value || null,
+
+    post_id:
+      document.getElementById(
+        "employeePost"
+      ).value || null,
+
+    role:
+      document.getElementById(
+        "employeeRole"
+      ).value.trim(),
+
+    shift:
+      document.getElementById(
+        "employeeShift"
+      ).value,
+
+    schedule:
+      document.getElementById(
+        "employeeSchedule"
+      ).value.trim()
+  };
+
   try {
-    await api("/api/employees", {
-      method: "POST",
-      body: JSON.stringify({
-        registration:
-          document.getElementById(
-            "employeeRegistration"
-          ).value,
+    if (employeeId) {
 
-        name:
-          document.getElementById(
-            "employeeName"
-          ).value,
+      await api(
+        `/api/employees/${employeeId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(body)
+        }
+      );
 
-        phone:
-          document.getElementById(
-            "employeePhone"
-          ).value,
+      notify(
+        "Colaborador atualizado com sucesso.",
+        "success"
+      );
 
-        contract_id:
-          document.getElementById(
-            "employeeContract"
-          ).value || null,
+    } else {
 
-        post_id:
-          document.getElementById(
-            "employeePost"
-          ).value || null,
+      await api(
+        "/api/employees",
+        {
+          method: "POST",
+          body: JSON.stringify(body)
+        }
+      );
 
-        role:
-          document.getElementById(
-            "employeeRole"
-          ).value,
+      notify(
+        "Colaborador cadastrado com sucesso.",
+        "success"
+      );
+    }
 
-        shift:
-          document.getElementById(
-            "employeeShift"
-          ).value,
+    cache.employees =
+      await api("/api/employees");
 
-        schedule:
-          document.getElementById(
-            "employeeSchedule"
-          ).value
-      })
-    });
-
-    notify("Colaborador salvo.");
     render("colaboradores");
 
   } catch (error) {
-    notify(error.message, "error");
+    notify(
+      error.message ||
+        "Não foi possível salvar o colaborador.",
+      "error"
+    );
   }
-}
-
-/* =========================
-   IMPORTAÇÃO
-========================= */
-
-function importPage() {
-  return `
-    <div class="page-header">
-
-      <div>
-        <h1>Importar Planilha</h1>
-
-        <p>
-          Cadastro e atualização em massa
-        </p>
-      </div>
-
-    </div>
-
-    <div class="import-grid">
-
-      <div class="panel">
-
-        <h3>
-          👥 Colaboradores
-        </h3>
-
-        <p class="muted">
-          Excel ou CSV com matrícula,
-          nome, CR, telefone, posto,
-          função, escala e horário.
-        </p>
-
-        <input
-          type="file"
-          id="employeeFile"
-          accept=".xlsx,.xls,.csv">
-
-        <button
-          class="primary"
-          onclick="importEmployees()">
-          Importar colaboradores
-        </button>
-
-        <div
-          id="employeeImportResult"
-          class="import-result">
-        </div>
-
-      </div>
-
-      <div class="panel">
-
-        <h3>
-          ⏱️ Horas Extras
-        </h3>
-
-        <p class="muted">
-          Colunas: Matrícula, Data
-          e Horas Extras.
-        </p>
-
-        <input
-          type="file"
-          id="overtimeFile"
-          accept=".xlsx,.xls,.csv">
-
-        <button
-          class="primary"
-          onclick="importOvertime()">
-          Importar horas extras
-        </button>
-
-        <div
-          id="overtimeImportResult"
-          class="import-result">
-        </div>
-
-      </div>
-
-    </div>
-  `;
-}
 
 async function importEmployees() {
   const file =
