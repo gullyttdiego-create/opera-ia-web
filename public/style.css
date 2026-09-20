@@ -850,6 +850,37 @@ tbody tr:hover {
   opacity: 1;
 }
 
+.request-send-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr);
+  gap: 20px;
+  margin-bottom: 18px;
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
+.request-send-panel p {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+}
+
+.request-send-list {
+  display: grid;
+  gap: 8px;
+}
+
+.request-send-list button {
+  width: 100%;
+  text-align: left;
+}
+
+.request-send-list button:disabled {
+  color: #166534;
+  background: #d1fae5;
+  cursor: default;
+  opacity: 1;
+}
+
 @media (max-width: 760px) {
   .coverage-batch-panel {
     align-items: stretch;
@@ -858,6 +889,10 @@ tbody tr:hover {
 
   .coverage-batch-list {
     min-width: 0;
+  }
+
+  .request-send-panel {
+    grid-template-columns: 1fr;
   }
 }
 

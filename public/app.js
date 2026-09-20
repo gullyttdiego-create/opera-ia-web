@@ -5,6 +5,7 @@ let currentUser = JSON.parse(localStorage.getItem("opera_user") || "null");
 let currentPage = "dashboard";
 let installPrompt = null;
 let activeCoverageSession = null;
+let activeRequestSendQueue = [];
 
 let cache = {
   contracts: [],
@@ -2923,7 +2924,7 @@ function showRequestForm(type) {
             ">
 
             <option value="">
-              Todos
+              Selecione um contrato
             </option>
 
             ${activeContractsOptions()}
@@ -2957,8 +2958,8 @@ function showRequestForm(type) {
             id="requestMessage"
             rows="3">${
               isPoint
-                ? "favor assinar sua folha de ponto referente ao período informado."
-                : "existem treinamentos pendentes no seu aplicativo GPS VC. Favor acessar e concluir."
+                ? "você tem uma folha de ponto pendente de assinatura no aplicativo GPS VC. Favor realizar com a maior brevidade."
+                : "você tem treinamentos pendentes no seu aplicativo GPS VC. Favor realizar com a maior brevidade."
             }</textarea>
         </label>
 
@@ -3000,7 +3001,7 @@ function showRequestForm(type) {
               '${type}'
             )
           ">
-          Criar Solicitações
+          Criar e preparar mensagens
         </button>
 
       </div>
@@ -3017,16 +3018,20 @@ function updateRequestEmployees() {
       "requestContract"
     )?.value || "";
 
-  const employees =
-    cache.employees.filter(
-      e =>
-        e.active &&
-        (
-          !contractId ||
+  const employees = contractId
+    ? cache.employees.filter(
+        e =>
+          e.active &&
           Number(e.contract_id) ===
             Number(contractId)
-        )
-    );
+      )
+    : [];
+
+  const selectAll = document.getElementById(
+    "selectAllEmployees"
+  );
+
+  if (selectAll) selectAll.checked = false;
 
   document.getElementById(
     "requestEmployees"
@@ -3060,7 +3065,11 @@ function updateRequestEmployees() {
         `).join("")
       : `
           <p class="muted">
-            Nenhum colaborador.
+            ${
+              contractId
+                ? "Nenhum colaborador ativo neste contrato."
+                : "Selecione um contrato para exibir os colaboradores."
+            }
           </p>
         `;
 }
@@ -3082,6 +3091,18 @@ function toggleAllRequestEmployees() {
 }
 
 async function createRequests(type) {
+  const contractId =
+    document.getElementById(
+      "requestContract"
+    ).value;
+
+  if (!contractId) {
+    return notify(
+      "Selecione um contrato.",
+      "error"
+    );
+  }
+
   const employeeIds =
     Array.from(
       document.querySelectorAll(
@@ -3107,9 +3128,18 @@ async function createRequests(type) {
   const baseMessage =
     document.getElementById(
       "requestMessage"
-    ).value;
+    ).value.trim();
+
+  if (!baseMessage) {
+    return notify(
+      "Informe a mensagem.",
+      "error"
+    );
+  }
 
   try {
+    const queue = [];
+
     /*
       Criação individual para permitir
       mensagem personalizada com o nome.
@@ -3131,11 +3161,12 @@ async function createRequests(type) {
           reference.split("-");
 
         message =
-          `${employee.name}, favor assinar sua folha de ponto referente ao mês ` +
-          `${month}/${year}.`;
+          `${employee.name}, você tem uma folha de ponto referente ao mês ` +
+          `${month}/${year} pendente de assinatura no aplicativo GPS VC. ` +
+          "Favor realizar com a maior brevidade.";
       }
 
-      await api(
+      const result = await api(
         "/api/requests",
         {
           method: "POST",
@@ -3149,23 +3180,124 @@ async function createRequests(type) {
           })
         }
       );
+
+      const created = result.items?.[0];
+
+      if (created) {
+        queue.push({
+          requestId: created.id,
+          employeeId,
+          name: employee.name,
+          phone: employee.phone,
+          message,
+          sent: false
+        });
+      }
     }
 
+    activeRequestSendQueue = queue;
+
     notify(
-      `${employeeIds.length} solicitações criadas.`
+      `${employeeIds.length} solicitações criadas. Abra cada mensagem abaixo.`
     );
 
-    render(
-      type === "FOLHA_PONTO"
-        ? "ponto"
-        : "treinamentos"
-    );
+    showRequestSendQueue(type);
 
   } catch (error) {
     notify(
       error.message,
       "error"
     );
+  }
+}
+
+function showRequestSendQueue(type) {
+  const area = document.getElementById("requestArea");
+
+  if (!area) return;
+
+  area.innerHTML = `
+    <div class="panel request-send-panel">
+      <div>
+        <h3>Mensagens prontas</h3>
+        <p>
+          Toque em cada colaborador, confira a mensagem no WhatsApp
+          e confirme o envio. O sistema não envia sem sua confirmação.
+        </p>
+      </div>
+
+      <div class="request-send-list">
+        ${activeRequestSendQueue.map((item, index) => `
+          <button
+            id="requestSend-${index}"
+            class="wa-button"
+            ${item.phone ? "" : "disabled"}
+            onclick="openPreparedRequestMessage(${index}, '${type}')">
+            ${item.phone
+              ? `Abrir WhatsApp — ${esc(item.name)}`
+              : `Sem telefone — ${esc(item.name)}`}
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `;
+
+  area.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function openPreparedRequestMessage(index, type) {
+  const item = activeRequestSendQueue[index];
+
+  if (!item || item.sent || !item.phone) return;
+
+  const popup = window.open(
+    whatsappUrl(item.phone, item.message),
+    "_blank"
+  );
+
+  if (!popup) {
+    notify(
+      "O navegador bloqueou o WhatsApp. Permita pop-ups e tente novamente.",
+      "error"
+    );
+    return;
+  }
+
+  popup.opener = null;
+
+  try {
+    await api(
+      `/api/requests/${item.requestId}/status`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          status: "MENSAGEM_ENVIADA"
+        })
+      }
+    );
+
+    item.sent = true;
+
+    const button = document.getElementById(
+      `requestSend-${index}`
+    );
+
+    if (button) {
+      button.disabled = true;
+      button.textContent = `✓ Aberta — ${item.name}`;
+    }
+
+    const remaining = activeRequestSendQueue.filter(
+      current => current.phone && !current.sent
+    ).length;
+
+    notify(
+      remaining
+        ? `Mensagem aberta. Restam ${remaining}.`
+        : "Todas as mensagens foram abertas."
+    );
+  } catch (error) {
+    notify(error.message, "error");
   }
 }
 
