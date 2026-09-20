@@ -2148,7 +2148,8 @@ function showCoverageCandidates(
 ) {
   activeCoverageSession = {
     coverage,
-    candidates
+    candidates,
+    batchIds: []
   };
 
   const pendingCandidates =
@@ -2159,6 +2160,9 @@ function showCoverageCandidates(
     );
 
   const nextBatch = pendingCandidates.slice(0, 5);
+  activeCoverageSession.batchIds = nextBatch.map(
+    candidate => Number(candidate.id)
+  );
   const contactedCount = candidates.filter(
     candidate =>
       candidate.status === "MENSAGEM_ENVIADA" ||
@@ -2202,11 +2206,16 @@ function showCoverageCandidates(
                 </p>
               </div>
 
-              <button
-                class="wa-button"
-                onclick="openCoverageBatch()">
-                Abrir lote de ${nextBatch.length}
-              </button>
+              <div class="coverage-batch-list">
+                ${nextBatch.map((candidate, index) => `
+                  <button
+                    id="batchCandidate-${candidate.id}"
+                    class="wa-button"
+                    onclick="openCoverageBatchCandidate(${candidate.id})">
+                    ${index + 1}. ${esc(candidate.name)}
+                  </button>
+                `).join("")}
+              </div>
             </div>
           `
           : coverage.status === "CONFIRMADA"
@@ -2388,74 +2397,74 @@ function whatsappUrl(phone, message) {
   );
 }
 
-async function openCoverageBatch() {
+async function openCoverageBatchCandidate(employeeId) {
   if (!activeCoverageSession) return;
 
-  const { coverage, candidates } = activeCoverageSession;
-  const batch = candidates
-    .filter(candidate =>
-      candidate.phone &&
-      (!candidate.status ||
-        candidate.status === "PENDENTE")
-    )
-    .slice(0, 5);
+  const { coverage, candidates, batchIds } = activeCoverageSession;
+  const candidate = candidates.find(
+    item => Number(item.id) === Number(employeeId)
+  );
 
-  if (!batch.length) {
-    notify("Não há candidatos pendentes com WhatsApp.", "error");
+  if (
+    !candidate ||
+    !candidate.phone ||
+    (candidate.status && candidate.status !== "PENDENTE")
+  ) {
+    notify("Este candidato já foi contatado.", "error");
     return;
   }
 
-  if (!confirm(
-    `Abrir ${batch.length} conversas do WhatsApp com as mensagens prontas?`
-  )) {
-    return;
-  }
+  const popup = window.open(
+    whatsappUrl(
+      candidate.phone,
+      buildCoverageMessage(coverage, candidate.name)
+    ),
+    "_blank"
+  );
 
-  const opened = [];
-
-  for (const candidate of batch) {
-    const popup = window.open(
-      whatsappUrl(
-        candidate.phone,
-        buildCoverageMessage(coverage, candidate.name)
-      ),
-      "_blank"
-    );
-
-    if (popup) {
-      popup.opener = null;
-      opened.push(candidate);
-    }
-  }
-
-  if (!opened.length) {
+  if (!popup) {
     notify(
-      "O navegador bloqueou as conversas. Permita pop-ups para o OPERA IA e tente novamente.",
+      "O navegador bloqueou o WhatsApp. Permita pop-ups para o OPERA IA e tente novamente.",
       "error"
     );
     return;
   }
 
-  const results = await Promise.allSettled(
-    opened.map(candidate =>
-      api(
-        `/api/coverages/${coverage.id}/contact/${candidate.id}`,
-        { method: "POST" }
-      )
-    )
-  );
+  popup.opener = null;
 
-  results.forEach((result, index) => {
-    if (result.status === "fulfilled") {
-      opened[index].status = "MENSAGEM_ENVIADA";
+  try {
+    await api(
+      `/api/coverages/${coverage.id}/contact/${candidate.id}`,
+      { method: "POST" }
+    );
+
+    candidate.status = "MENSAGEM_ENVIADA";
+
+    const button = document.getElementById(
+      `batchCandidate-${candidate.id}`
+    );
+
+    if (button) {
+      button.disabled = true;
+      button.textContent = `✓ ${candidate.name}`;
     }
-  });
 
-  showCoverageCandidates(coverage, candidates);
+    const batchFinished = batchIds.every(id => {
+      const item = candidates.find(
+        current => Number(current.id) === Number(id)
+      );
 
-  notify(
-    `${opened.length} conversa(s) aberta(s). Confirme no sistema quando alguém aceitar.`
-  );
+      return item?.status === "MENSAGEM_ENVIADA" ||
+        item?.status === "CONFIRMADO";
+    });
+
+    if (batchFinished) {
+      showCoverageCandidates(coverage, candidates);
+      notify("Lote concluído. O próximo grupo já está disponível.");
+    }
+  } catch (error) {
+    notify(error.message, "error");
+  }
 }
 
 async function viewCandidates(

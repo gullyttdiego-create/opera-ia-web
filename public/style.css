@@ -832,10 +832,32 @@ tbody tr:hover {
   color: var(--text-soft);
 }
 
+.coverage-batch-list {
+  display: grid;
+  gap: 8px;
+  min-width: 240px;
+}
+
+.coverage-batch-list button {
+  width: 100%;
+  text-align: left;
+}
+
+.coverage-batch-list button:disabled {
+  color: #166534;
+  background: #d1fae5;
+  cursor: default;
+  opacity: 1;
+}
+
 @media (max-width: 760px) {
   .coverage-batch-panel {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .coverage-batch-list {
+    min-width: 0;
   }
 }
 
