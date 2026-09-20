@@ -1,4 +1,4 @@
-const CACHE_NAME = "opera-ia-shell-v1";
+const CACHE_NAME = "opera-ia-shell-v2";
 const APP_SHELL = [
   "/",
   "/index.html",

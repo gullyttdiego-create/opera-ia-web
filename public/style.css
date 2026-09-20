@@ -815,6 +815,30 @@ tbody tr:hover {
   font-weight: 700;
 }
 
+.coverage-batch-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding: 16px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: var(--radius);
+}
+
+.coverage-batch-panel p {
+  margin: 5px 0 0;
+  color: var(--text-soft);
+}
+
+@media (max-width: 760px) {
+  .coverage-batch-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .candidate-detail {
   color: var(--text-soft);
   font-size: 11px;

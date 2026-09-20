@@ -4,6 +4,7 @@ let token = localStorage.getItem("opera_token") || "";
 let currentUser = JSON.parse(localStorage.getItem("opera_user") || "null");
 let currentPage = "dashboard";
 let installPrompt = null;
+let activeCoverageSession = null;
 
 let cache = {
   contracts: [],
@@ -2145,6 +2146,25 @@ function showCoverageCandidates(
   coverage,
   candidates
 ) {
+  activeCoverageSession = {
+    coverage,
+    candidates
+  };
+
+  const pendingCandidates =
+    candidates.filter(candidate =>
+      candidate.phone &&
+      (!candidate.status ||
+        candidate.status === "PENDENTE")
+    );
+
+  const nextBatch = pendingCandidates.slice(0, 5);
+  const contactedCount = candidates.filter(
+    candidate =>
+      candidate.status === "MENSAGEM_ENVIADA" ||
+      candidate.status === "CONFIRMADO"
+  ).length;
+
   document.getElementById(
     "coverageArea"
   ).innerHTML = `
@@ -2167,6 +2187,40 @@ function showCoverageCandidates(
           encontrados
         </span>
       </div>
+
+      ${
+        coverage.status !== "CONFIRMADA" && nextBatch.length
+          ? `
+            <div class="coverage-batch-panel">
+              <div>
+                <strong>
+                  Lote ${Math.floor(contactedCount / 5) + 1}
+                </strong>
+                <p>
+                  ${nextBatch.length} candidato(s) selecionado(s) pela IA.
+                  As conversas serão abertas com a mensagem pronta.
+                </p>
+              </div>
+
+              <button
+                class="wa-button"
+                onclick="openCoverageBatch()">
+                Abrir lote de ${nextBatch.length}
+              </button>
+            </div>
+          `
+          : coverage.status === "CONFIRMADA"
+            ? `
+              <div class="message success">
+                Cobertura confirmada. Novos lotes estão bloqueados.
+              </div>
+            `
+            : `
+              <div class="message">
+                Todos os candidatos com WhatsApp já foram contatados.
+              </div>
+            `
+      }
 
       ${
         candidates.length
@@ -2221,6 +2275,10 @@ function showCoverageCandidates(
                       ${moneyHours(
                         e.overtime_90d
                       )}h
+                      •
+                      ${esc(
+                        e.status || "PENDENTE"
+                      )}
                     </small>
 
                   </div>
@@ -2296,6 +2354,110 @@ function showCoverageCandidates(
   `;
 }
 
+function buildCoverageMessage(coverage, name) {
+  const contract =
+    coverage.contract_name ||
+    cache.contracts.find(
+      item =>
+        Number(item.id) ===
+        Number(coverage.contract_id)
+    )?.name;
+
+  return (
+    `Olá ${name}, tudo bem? ` +
+    `Temos uma oportunidade de cobertura extra` +
+    `${contract ? ` no contrato ${contract}` : ""}` +
+    `${
+      coverage.coverage_date
+        ? ` para o dia ${dateBR(coverage.coverage_date)}`
+        : ""
+    }. Você possui disponibilidade?`
+  );
+}
+
+function whatsappUrl(phone, message) {
+  let normalized = String(phone || "").replace(/\D/g, "");
+
+  if (normalized && normalized.length <= 11) {
+    normalized = `55${normalized}`;
+  }
+
+  return (
+    `https://wa.me/${normalized}` +
+    `?text=${encodeURIComponent(message)}`
+  );
+}
+
+async function openCoverageBatch() {
+  if (!activeCoverageSession) return;
+
+  const { coverage, candidates } = activeCoverageSession;
+  const batch = candidates
+    .filter(candidate =>
+      candidate.phone &&
+      (!candidate.status ||
+        candidate.status === "PENDENTE")
+    )
+    .slice(0, 5);
+
+  if (!batch.length) {
+    notify("Não há candidatos pendentes com WhatsApp.", "error");
+    return;
+  }
+
+  if (!confirm(
+    `Abrir ${batch.length} conversas do WhatsApp com as mensagens prontas?`
+  )) {
+    return;
+  }
+
+  const opened = [];
+
+  for (const candidate of batch) {
+    const popup = window.open(
+      whatsappUrl(
+        candidate.phone,
+        buildCoverageMessage(coverage, candidate.name)
+      ),
+      "_blank"
+    );
+
+    if (popup) {
+      popup.opener = null;
+      opened.push(candidate);
+    }
+  }
+
+  if (!opened.length) {
+    notify(
+      "O navegador bloqueou as conversas. Permita pop-ups para o OPERA IA e tente novamente.",
+      "error"
+    );
+    return;
+  }
+
+  const results = await Promise.allSettled(
+    opened.map(candidate =>
+      api(
+        `/api/coverages/${coverage.id}/contact/${candidate.id}`,
+        { method: "POST" }
+      )
+    )
+  );
+
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      opened[index].status = "MENSAGEM_ENVIADA";
+    }
+  });
+
+  showCoverageCandidates(coverage, candidates);
+
+  notify(
+    `${opened.length} conversa(s) aberta(s). Confirme no sistema quando alguém aceitar.`
+  );
+}
+
 async function viewCandidates(
   coverageId
 ) {
@@ -2342,23 +2504,10 @@ async function contactCoverage(
         c => c.id === coverageId
       );
 
-    const message =
-      `Olá ${name}, tudo bem? ` +
-      `Temos uma oportunidade de ` +
-      `cobertura extra` +
-      `${
-        coverage?.contract_name
-          ? ` no contrato ${coverage.contract_name}`
-          : ""
-      }` +
-      `${
-        coverage?.coverage_date
-          ? ` para o dia ${dateBR(
-              coverage.coverage_date
-            )}`
-          : ""
-      }. ` +
-      `Você possui disponibilidade?`;
+    const message = buildCoverageMessage(
+      coverage || { id: coverageId },
+      name
+    );
 
     await api(
       `/api/coverages/${coverageId}/contact/${employeeId}`,

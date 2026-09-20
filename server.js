@@ -2184,6 +2184,13 @@ app.post(
       WHERE
         coverage_id=$1
         AND employee_id=$2
+        AND status='PENDENTE'
+        AND EXISTS (
+          SELECT 1
+          FROM coverages
+          WHERE id=$1
+            AND status='ABERTA'
+        )
       RETURNING *
       `,
       [
@@ -2191,6 +2198,12 @@ app.post(
         req.params.employeeId
       ]
     );
+
+    if (!result.rows[0]) {
+      return res.status(409).json({
+        error: "Este candidato já foi contatado ou a cobertura não está mais aberta."
+      });
+    }
 
     res.json(result.rows[0]);
   }
