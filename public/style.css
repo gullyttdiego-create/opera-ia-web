@@ -205,6 +205,47 @@ textarea::placeholder {
   color: #94a3b8;
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+}
+
+.checkbox-label input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+}
+
+.install-button {
+  display: none;
+  color: var(--primary);
+  background: var(--primary-light);
+}
+
+.pwa-installable .install-button {
+  display: inline-flex;
+  align-items: center;
+}
+
+.text-soft {
+  color: var(--text-soft);
+  line-height: 1.55;
+}
+
+.import-result {
+  margin-top: 16px;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+
+@media (display-mode: standalone) {
+  .install-button {
+    display: none !important;
+  }
+}
+
 /* =========================================================
    BOTÕES
    ========================================================= */

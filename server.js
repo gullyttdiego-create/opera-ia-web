@@ -194,6 +194,47 @@ function normalizePhone(phone = "") {
   return value;
 }
 
+function nullableText(value) {
+  if (value === undefined || value === null) return null;
+
+  const text = String(value).trim();
+  return text || null;
+}
+
+function nullableId(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : NaN;
+}
+
+async function validateEmployeeAssignment(contractId, postId) {
+  if (Number.isNaN(contractId) || Number.isNaN(postId)) {
+    return "Contrato ou posto inválido.";
+  }
+
+  if (!postId) return null;
+
+  const post = await pool.query(
+    `
+    SELECT contract_id
+    FROM posts
+    WHERE id=$1 AND active=TRUE
+    `,
+    [postId]
+  );
+
+  if (!post.rows[0]) return "Posto não encontrado ou inativo.";
+
+  if (!contractId || Number(post.rows[0].contract_id) !== contractId) {
+    return "O posto selecionado não pertence ao contrato informado.";
+  }
+
+  return null;
+}
+
 function normalizeShift(value = "") {
   const v = String(value).trim().toUpperCase();
 
@@ -952,6 +993,17 @@ app.post(
         });
       }
 
+      const contractId = nullableId(contract_id);
+      const postId = nullableId(post_id);
+      const assignmentError = await validateEmployeeAssignment(
+        contractId,
+        postId
+      );
+
+      if (assignmentError) {
+        return res.status(400).json({ error: assignmentError });
+      }
+
       const result = await pool.query(
         `
         INSERT INTO employees
@@ -971,29 +1023,19 @@ app.post(
             $1,$2,$3,$4,$5,
             $6,$7,$8,TRUE
           )
-        ON CONFLICT (registration)
-        DO UPDATE SET
-          name=EXCLUDED.name,
-          phone=EXCLUDED.phone,
-          contract_id=
-            EXCLUDED.contract_id,
-          post_id=EXCLUDED.post_id,
-          role=EXCLUDED.role,
-          shift=EXCLUDED.shift,
-          schedule=EXCLUDED.schedule,
-          active=TRUE,
-          updated_at=NOW()
         RETURNING *
         `,
         [
           String(registration).trim(),
           String(name).trim(),
-          normalizePhone(phone),
-          contract_id || null,
-          post_id || null,
-          role || null,
-          normalizeShift(shift),
-          schedule || null
+          nullableText(normalizePhone(phone)),
+          contractId,
+          postId,
+          nullableText(role),
+          nullableText(shift)
+            ? normalizeShift(shift)
+            : null,
+          nullableText(schedule)
         ]
       );
 
@@ -1003,9 +1045,13 @@ app.post(
     } catch (error) {
       console.error(error);
 
-      res.status(500).json({
+      const duplicate = error.code === "23505";
+
+      res.status(duplicate ? 409 : 500).json({
         error:
-          "Erro ao salvar colaborador."
+          duplicate
+            ? "Já existe um colaborador com esta matrícula."
+            : "Erro ao salvar colaborador."
       });
     }
   }
@@ -1015,59 +1061,86 @@ app.put(
   "/api/employees/:id",
   auth,
   async (req, res) => {
-    const {
-      registration,
-      name,
-      phone,
-      contract_id,
-      post_id,
-      role,
-      shift,
-      schedule,
-      active
-    } = req.body;
+    try {
+      const {
+        registration,
+        name,
+        phone,
+        contract_id,
+        post_id,
+        role,
+        shift,
+        schedule,
+        active
+      } = req.body;
 
-    const result = await pool.query(
-      `
-      UPDATE employees
-      SET
-        registration=
-          COALESCE($1,registration),
-        name=COALESCE($2,name),
-        phone=COALESCE($3,phone),
-        contract_id=
-          COALESCE($4,contract_id),
-        post_id=COALESCE($5,post_id),
-        role=COALESCE($6,role),
-        shift=COALESCE($7,shift),
-        schedule=
-          COALESCE($8,schedule),
-        active=COALESCE($9,active),
-        updated_at=NOW()
-      WHERE id=$10
-      RETURNING *
-      `,
-      [
-        registration || null,
-        name || null,
-        phone === undefined
-          ? null
-          : normalizePhone(phone),
-        contract_id || null,
-        post_id || null,
-        role || null,
-        shift
-          ? normalizeShift(shift)
-          : null,
-        schedule || null,
-        active === undefined
-          ? null
-          : active,
-        req.params.id
-      ]
-    );
+      if (!nullableText(registration) || !nullableText(name)) {
+        return res.status(400).json({
+          error: "Informe matrícula e nome."
+        });
+      }
 
-    res.json(result.rows[0]);
+      const contractId = nullableId(contract_id);
+      const postId = nullableId(post_id);
+      const assignmentError = await validateEmployeeAssignment(
+        contractId,
+        postId
+      );
+
+      if (assignmentError) {
+        return res.status(400).json({ error: assignmentError });
+      }
+
+      const result = await pool.query(
+        `
+        UPDATE employees
+        SET
+          registration=$1,
+          name=$2,
+          phone=$3,
+          contract_id=$4,
+          post_id=$5,
+          role=$6,
+          shift=$7,
+          schedule=$8,
+          active=$9,
+          updated_at=NOW()
+        WHERE id=$10
+        RETURNING *
+        `,
+        [
+          nullableText(registration),
+          nullableText(name),
+          nullableText(normalizePhone(phone)),
+          contractId,
+          postId,
+          nullableText(role),
+          nullableText(shift)
+            ? normalizeShift(shift)
+            : null,
+          nullableText(schedule),
+          active !== false,
+          req.params.id
+        ]
+      );
+
+      if (!result.rows[0]) {
+        return res.status(404).json({
+          error: "Colaborador não encontrado."
+        });
+      }
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error(error);
+      const duplicate = error.code === "23505";
+
+      res.status(duplicate ? 409 : 500).json({
+        error: duplicate
+          ? "Já existe um colaborador com esta matrícula."
+          : "Erro ao atualizar colaborador."
+      });
+    }
   }
 );
 

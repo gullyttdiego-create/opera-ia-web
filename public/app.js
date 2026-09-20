@@ -3,6 +3,7 @@ const app = document.getElementById("app");
 let token = localStorage.getItem("opera_token") || "";
 let currentUser = JSON.parse(localStorage.getItem("opera_user") || "null");
 let currentPage = "dashboard";
+let installPrompt = null;
 
 let cache = {
   contracts: [],
@@ -105,6 +106,27 @@ function notify(message, type = "success") {
   document.body.appendChild(div);
 
   setTimeout(() => div.remove(), 3500);
+}
+
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  installPrompt = event;
+  document.body.classList.add("pwa-installable");
+});
+
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  document.body.classList.remove("pwa-installable");
+  notify("OPERA IA instalado com sucesso.");
+});
+
+async function installApp() {
+  if (!installPrompt) return;
+
+  await installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null;
+  document.body.classList.remove("pwa-installable");
 }
 
 /* =========================
@@ -399,6 +421,12 @@ async function render(page = "dashboard") {
         </div>
 
         <div class="topbar-actions">
+
+          <button
+            class="install-button"
+            onclick="installApp()">
+            Instalar app
+          </button>
 
           <div class="status">
             <span class="online"></span>
@@ -1094,6 +1122,7 @@ function employeeTable(items) {
             <th>Função</th>
             <th>Escala</th>
             <th>Horário</th>
+            <th>Status</th>
             <th>HE 90d</th>
             <th>WhatsApp</th>
             <th>Ações</th>
@@ -1133,6 +1162,16 @@ function employeeTable(items) {
 
               <td>
                 ${esc(e.schedule || "-")}
+              </td>
+
+              <td>
+                <span class="badge ${
+                  e.active
+                    ? "badge-success"
+                    : "badge-neutral"
+                }">
+                  ${e.active ? "Ativo" : "Inativo"}
+                </span>
               </td>
 
               <td>
@@ -1199,6 +1238,8 @@ function editEmployee(id) {
     document.getElementById("employeeContract").value =
       employee.contract_id || "";
 
+    updateEmployeePosts();
+
     document.getElementById("employeePost").value =
       employee.post_id || "";
 
@@ -1210,6 +1251,15 @@ function editEmployee(id) {
 
     document.getElementById("employeeSchedule").value =
       employee.schedule || "";
+
+    document.getElementById("employeeActive").checked =
+      employee.active !== false;
+
+    document.getElementById("employeeFormTitle").textContent =
+      "Editar Colaborador";
+
+    document.getElementById("employeeSubmitButton").textContent =
+      "Atualizar Colaborador";
 
     const form = document.querySelector("#formArea form");
 
@@ -1225,91 +1275,6 @@ function editEmployee(id) {
       });
 
   }, 0);
-}
-
-  return `
-    <div class="table-wrap">
-
-      <table class="data-table">
-
-        <thead>
-          <tr>
-            <th>Matrícula</th>
-            <th>Nome</th>
-            <th>Contrato</th>
-            <th>Posto</th>
-            <th>Função</th>
-            <th>Escala</th>
-            <th>Horário</th>
-            <th>HE 90d</th>
-            <th>WhatsApp</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          ${items.map(e => `
-            <tr>
-              <td>
-                ${esc(e.registration)}
-              </td>
-
-              <td>
-                <strong>
-                  ${esc(e.name)}
-                </strong>
-              </td>
-
-              <td>
-                ${esc(
-                  e.contract_name || "-"
-                )}
-              </td>
-
-              <td>
-                ${esc(
-                  e.post_name || "-"
-                )}
-              </td>
-
-              <td>
-                ${esc(e.role || "-")}
-              </td>
-
-              <td>
-                ${esc(e.shift || "-")}
-              </td>
-
-              <td>
-                ${esc(e.schedule || "-")}
-              </td>
-
-              <td>
-                ${moneyHours(
-                  e.overtime_90d
-                )}h
-              </td>
-
-              <td>
-                ${
-                  e.phone
-                    ? `<button
-                        class="wa-button"
-                        onclick="openWhatsApp(
-                          '${esc(e.phone)}',
-                          'Olá ${esc(e.name)}, tudo bem?'
-                        )">
-                        WhatsApp
-                      </button>`
-                    : "-"
-                }
-              </td>
-            </tr>
-          `).join("")}
-        </tbody>
-
-      </table>
-    </div>
-  `;
 }
 
 function filterEmployees() {
@@ -1355,7 +1320,7 @@ function showEmployeeForm() {
     <div class="panel form-panel">
 
       <div class="panel-title">
-        <h3>Novo Colaborador</h3>
+        <h3 id="employeeFormTitle">Novo Colaborador</h3>
 
         <button
           onclick="
@@ -1443,8 +1408,18 @@ function showEmployeeForm() {
             placeholder="07:00 às 19:00">
         </label>
 
+        <label class="checkbox-label">
+          <input
+            id="employeeActive"
+            type="checkbox"
+            checked>
+          Colaborador ativo
+        </label>
+
         <div class="form-actions">
-          <button class="primary">
+          <button
+            id="employeeSubmitButton"
+            class="primary">
             Salvar Colaborador
           </button>
         </div>
@@ -1530,7 +1505,12 @@ async function saveEmployee(event) {
     schedule:
       document.getElementById(
         "employeeSchedule"
-      ).value.trim()
+      ).value.trim(),
+
+    active:
+      document.getElementById(
+        "employeeActive"
+      ).checked
   };
 
   try {
@@ -1577,6 +1557,68 @@ async function saveEmployee(event) {
       "error"
     );
   }
+}
+
+function importPage() {
+  return `
+    <div class="page-header">
+      <div>
+        <h1>Importar Planilhas</h1>
+        <p>Atualize colaboradores e horas extras em lote.</p>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <div class="panel-title">
+          <h3>Colaboradores</h3>
+        </div>
+
+        <p class="text-soft">
+          Envie uma planilha XLSX, XLS ou CSV. Registros existentes são
+          identificados pela matrícula e atualizados sem apagar o histórico.
+        </p>
+
+        <input
+          id="employeeFile"
+          type="file"
+          accept=".xlsx,.xls,.csv">
+
+        <div class="form-actions">
+          <button class="primary" onclick="importEmployees()">
+            Importar colaboradores
+          </button>
+        </div>
+
+        <div id="employeeImportResult" class="import-result"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">
+          <h3>Horas extras</h3>
+        </div>
+
+        <p class="text-soft">
+          Importe os lançamentos de horas extras usando a matrícula para
+          relacionar cada registro ao colaborador.
+        </p>
+
+        <input
+          id="overtimeFile"
+          type="file"
+          accept=".xlsx,.xls,.csv">
+
+        <div class="form-actions">
+          <button class="primary" onclick="importOvertime()">
+            Importar horas extras
+          </button>
+        </div>
+
+        <div id="overtimeImportResult" class="import-result"></div>
+      </div>
+    </div>
+  `;
+}
 
 async function importEmployees() {
   const file =
@@ -3939,6 +3981,17 @@ async function start() {
       </div>
     `;
   }
+}
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/service-worker.js")
+      .catch(error => console.error(
+        "Falha ao registrar o service worker:",
+        error
+      ));
+  });
 }
 
 start();
